@@ -40,6 +40,9 @@ detection:
     - couch
     - potted plant
     - dining table
+    - bottle
+    - laptop
+    - cell phone
 
 tracking:
   enabled: true
