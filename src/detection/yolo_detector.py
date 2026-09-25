@@ -78,12 +78,27 @@ class YoloDetector(DetectorInterface):
             self._model = YOLO(path_to_load)
             self._resolve_target_class_ids()
             self._is_loaded = True
+            self._warm_up()
             logger.info("YOLO model initialized successfully.")
             return True
         except Exception as e:
             logger.error(f"Failed to load YOLO model weights at '{path_to_load}': {e}")
             self._is_loaded = False
             return False
+
+    def _warm_up(self) -> None:
+        """Runs one inference on a blank frame so the first real frame is not delayed by several seconds."""
+        if np is None:
+            return
+        try:
+            self._model(
+                np.zeros((480, 640, 3), dtype=np.uint8),
+                conf=self.confidence_threshold,
+                device=self.device,
+                verbose=False,
+            )
+        except Exception as e:
+            logger.warning(f"YOLO warm-up inference failed (first frame may be slow): {e}")
 
     def detect(self, frame: Any) -> DetectionResult:
         """Runs real-time object detection on frame. Returns DetectionResult."""

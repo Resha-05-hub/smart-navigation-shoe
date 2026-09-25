@@ -38,6 +38,12 @@ class WebcamCamera(CameraInterface):
         self.simulation_fallback = simulation_fallback
         self._cap: Any = None
 
+    @property
+    def source_description(self) -> str:
+        if self._cap is None and self.simulation_fallback and self.status == CameraStatus.CONNECTED:
+            return "SIMULATION FRAME"
+        return f"WEBCAM {self.device_id}"
+
     def connect(self) -> bool:
         """Connects to physical webcam device via OpenCV."""
         logger.info(f"Connecting to webcam device ID {self.device_id}...")

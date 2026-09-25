@@ -41,6 +41,12 @@ models/*.pt
 models/*.onnx
 models/*.engine
 
+# Demo media (generated or recorded locally)
+demo/*.mp4
+demo/*.avi
+demo/*.mov
+demo/*.mkv
+
 # IDE & Editors
 .vscode/
 .idea/

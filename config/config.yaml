@@ -5,13 +5,19 @@ system:
   environment: "windows_laptop"
 
 camera:
-  type: "webcam"       # Options: "webcam", "raspberry_pi"
+  type: "webcam"       # Options: "webcam", "video", "raspberry_pi"
   device_id: 0
-  width: 640
+  width: 640           # Webcam capture width; video/image sources are downscaled to this width
   height: 480
   fps: 30
   frame_skip: 0
   simulation_fallback: false
+  # Video/image input: a video file, a single image, or a folder of images (played in name order).
+  video_source: "demo/approach_demo.mp4"     # Used when type is "video"; --source PATH overrides
+  fallback_source: "demo/approach_demo.mp4"  # Played automatically if the live camera fails ("" = none)
+  loop: true               # Restart the video/images when they end
+  realtime: true           # Keep source speed: skip frames when YOLO is slower than the video
+  image_duration_s: 3.0    # Seconds each still image is shown
 
 detection:
   model_name: "yolov8n.pt"

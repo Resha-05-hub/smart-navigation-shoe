@@ -50,6 +50,11 @@ class CameraInterface(ABC):
         pass
 
     @property
+    def source_description(self) -> str:
+        """Short human-readable name of the frame source for dashboards and logs."""
+        return type(self).__name__
+
+    @property
     def is_connected(self) -> bool:
         """Checks if the camera stream is connected and active.
 

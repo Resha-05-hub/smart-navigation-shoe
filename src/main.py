@@ -15,6 +15,7 @@ from src.utils.helpers import load_config
 from src.utils.logger import setup_logger
 from src.camera.webcam_camera import WebcamCamera
 from src.camera.raspberry_pi_camera import RaspberryPiCamera
+from src.camera.camera_factory import open_camera
 from src.sensors.simulated_sensor import SimulatedDistanceSensor
 from src.sensors.ultrasonic_sensor import UltrasonicSensor
 from src.sensors.sensor_manager import SensorManager
@@ -218,10 +219,28 @@ def run_alert_demo(config_path: str = "config/config.yaml") -> None:
     print("[SUCCESS] Phase 5 Alert System Demonstration Completed Cleanly.\n")
 
 
-def run_realtime_fusion(config_path: str = "config/config.yaml", scenario: Optional[str] = None) -> None:
+def report_camera_failure(config: dict, source: Optional[str]) -> str:
+    """Prints why no frame source could be opened and returns the message for logging."""
+    if source:
+        message = f"Could not open video/image source '{source}'."
+    else:
+        cam_cfg = config.get("camera", {})
+        message = f"Could not connect to webcam device ID {cam_cfg.get('device_id', 0)}"
+        fallback = cam_cfg.get("fallback_source")
+        message += f" or fallback source '{fallback}'." if fallback else "."
+    print(f"[ERROR] {message}")
+    print("[HINT] Close other apps using the webcam, or play a recording with --source path/to/video.mp4 "
+          "(run 'python scripts/make_demo_video.py' to create the demo clip).")
+    return message
+
+
+def run_realtime_fusion(
+    config_path: str = "config/config.yaml",
+    scenario: Optional[str] = None,
+    source: Optional[str] = None,
+) -> None:
     """Phase 4 & 5: Real-Time Laptop Webcam + YOLO + Distance Sensors + Sensor Fusion + Risk Analysis + Alert System."""
     config = load_config(config_path)
-    cam_cfg = config.get("camera", {})
     det_cfg = config.get("detection", {})
     disp_cfg = det_cfg.get("display", {})
 
@@ -230,19 +249,11 @@ def run_realtime_fusion(config_path: str = "config/config.yaml", scenario: Optio
     print("=" * 70)
     print("Press 'q' or 'ESC' on the camera display window to exit.\n")
 
-    device_id = cam_cfg.get("device_id", 0)
-    camera = WebcamCamera(
-        device_id=device_id,
-        width=cam_cfg.get("width", 640),
-        height=cam_cfg.get("height", 480),
-        fps=cam_cfg.get("fps", 30),
-        simulation_fallback=False,
-    )
-
-    if not camera.connect():
-        print(f"[ERROR] Could not connect to webcam device ID {device_id}.")
-        print("[HINT] Ensure your laptop webcam is available and not opened in another application.")
+    camera = open_camera(config, source)
+    if camera is None:
+        report_camera_failure(config, source)
         return
+    print(f"[INFO] Frame source: {camera.source_description}")
 
     sensor_manager = SensorManager(config=config)
     scenario_engine = create_scenario_engine(config, sensor_manager, scenario)
@@ -283,7 +294,10 @@ def run_realtime_fusion(config_path: str = "config/config.yaml", scenario: Optio
         while True:
             success, frame = camera.read_frame()
             if not success or frame is None:
-                print("[WARNING] Empty or invalid frame received from webcam. Retrying...")
+                if not camera.is_opened():
+                    print("\n[INFO] Video/image source finished.")
+                    break
+                print("[WARNING] Empty or invalid frame received from camera. Retrying...")
                 time.sleep(0.03)
                 continue
 
@@ -359,10 +373,9 @@ def run_sensor_demo(config_path: str = "config/config.yaml") -> None:
     print("\n[SUCCESS] Phase 3 Distance Sensor Demonstration Completed Cleanly.\n")
 
 
-def run_realtime_detection(config_path: str = "config/config.yaml") -> None:
+def run_realtime_detection(config_path: str = "config/config.yaml", source: Optional[str] = None) -> None:
     """Phase 2: Runs real-time object detection using laptop webcam and Ultralytics YOLO."""
     config = load_config(config_path)
-    cam_cfg = config.get("camera", {})
     det_cfg = config.get("detection", {})
     disp_cfg = det_cfg.get("display", {})
 
@@ -371,19 +384,11 @@ def run_realtime_detection(config_path: str = "config/config.yaml") -> None:
     print("=" * 70)
     print("Press 'q' or 'ESC' on the camera display window to exit.\n")
 
-    device_id = cam_cfg.get("device_id", 0)
-    camera = WebcamCamera(
-        device_id=device_id,
-        width=cam_cfg.get("width", 640),
-        height=cam_cfg.get("height", 480),
-        fps=cam_cfg.get("fps", 30),
-        simulation_fallback=False,
-    )
-
-    if not camera.connect():
-        print(f"[ERROR] Could not connect to webcam device ID {device_id}.")
-        print("[HINT] Ensure your laptop webcam is available and not opened in another application.")
+    camera = open_camera(config, source)
+    if camera is None:
+        report_camera_failure(config, source)
         return
+    print(f"[INFO] Frame source: {camera.source_description}")
 
     model_path = det_cfg.get("model_path", "models/yolov8n.pt")
     detector = YoloDetector(
@@ -408,7 +413,10 @@ def run_realtime_detection(config_path: str = "config/config.yaml") -> None:
         while True:
             success, frame = camera.read_frame()
             if not success or frame is None:
-                print("[WARNING] Empty or invalid frame received from webcam. Retrying...")
+                if not camera.is_opened():
+                    print("\n[INFO] Video/image source finished.")
+                    break
+                print("[WARNING] Empty or invalid frame received from camera. Retrying...")
                 time.sleep(0.03)
                 continue
 
@@ -438,10 +446,13 @@ def run_realtime_detection(config_path: str = "config/config.yaml") -> None:
         print("[INFO] Camera released and OpenCV display windows closed cleanly.")
 
 
-def run_dashboard_mode(config_path: str = "config/config.yaml", scenario: Optional[str] = None) -> None:
+def run_dashboard_mode(
+    config_path: str = "config/config.yaml",
+    scenario: Optional[str] = None,
+    source: Optional[str] = None,
+) -> None:
     """Phase 6: Real-time Dashboard + Persistent Event & System Logging."""
     config = load_config(config_path)
-    cam_cfg = config.get("camera", {})
     det_cfg = config.get("detection", {})
     disp_cfg = det_cfg.get("display", {})
 
@@ -453,22 +464,12 @@ def run_dashboard_mode(config_path: str = "config/config.yaml", scenario: Option
     print("=" * 70)
     print("Press 'q' or 'ESC' on the camera display window to exit.\n")
 
-    device_id = cam_cfg.get("device_id", 0)
-    camera = WebcamCamera(
-        device_id=device_id,
-        width=cam_cfg.get("width", 640),
-        height=cam_cfg.get("height", 480),
-        fps=cam_cfg.get("fps", 30),
-        simulation_fallback=False,
-    )
-
-    if not camera.connect():
-        event_logger.log_system_message(f"Could not connect to webcam device ID {device_id}", level="ERROR")
-        print(f"[ERROR] Could not connect to webcam device ID {device_id}.")
-        print("[HINT] Ensure your laptop webcam is available and not opened in another application.")
+    camera = open_camera(config, source)
+    if camera is None:
+        event_logger.log_system_message(report_camera_failure(config, source), level="ERROR")
         return
 
-    event_logger.log_system_message("Camera connected")
+    event_logger.log_system_message(f"Camera connected: {camera.source_description}")
 
     sensor_manager = SensorManager(config=config)
     scenario_engine = create_scenario_engine(config, sensor_manager, scenario)
@@ -513,6 +514,10 @@ def run_dashboard_mode(config_path: str = "config/config.yaml", scenario: Option
         while True:
             success, frame = camera.read_frame()
             if not success or frame is None:
+                if not camera.is_opened():
+                    event_logger.log_system_message("Video/image source finished")
+                    print("\n[INFO] Video/image source finished.")
+                    break
                 time.sleep(0.03)
                 continue
 
@@ -546,7 +551,7 @@ def run_dashboard_mode(config_path: str = "config/config.yaml", scenario: Option
                 vibration_action=vib_text,
                 voice_message=alert_manager.last_triggered_text or "Path clear.",
                 recent_events=event_logger.recent_events,
-                camera_status="CONNECTED" if camera.is_connected else "DISCONNECTED",
+                camera_status=f"CONNECTED ({camera.source_description})" if camera.is_connected else "DISCONNECTED",
                 yolo_status="ACTIVE" if detector.is_loaded() else "INACTIVE",
                 sensors_status="ACTIVE (SIMULATED)",
                 sensor_mode=scenario_engine.status_text,
@@ -692,6 +697,13 @@ def main() -> None:
         help="Simulated sensor scenario to start (see sensors.simulation.scenarios in the config). "
              "In 'scenario' mode, omit it to play every scenario once.",
     )
+    parser.add_argument(
+        "--source",
+        type=str,
+        default=None,
+        help="Use a video file, image, or folder of images instead of the webcam "
+             "(detection, fusion, and dashboard modes).",
+    )
 
     args, _ = parser.parse_known_args()
 
@@ -704,15 +716,15 @@ def main() -> None:
             return
 
     if args.mode == "dashboard":
-        run_dashboard_mode(config_path=args.config, scenario=args.scenario)
+        run_dashboard_mode(config_path=args.config, scenario=args.scenario, source=args.source)
     elif args.mode == "scenario":
         run_scenario_mode(config_path=args.config, scenario=args.scenario)
     elif args.mode == "fusion":
-        run_realtime_fusion(config_path=args.config, scenario=args.scenario)
+        run_realtime_fusion(config_path=args.config, scenario=args.scenario, source=args.source)
     elif args.mode == "alerts":
         run_alert_demo(config_path=args.config)
     elif args.mode == "detection":
-        run_realtime_detection(config_path=args.config)
+        run_realtime_detection(config_path=args.config, source=args.source)
     elif args.mode == "sensors":
         run_sensor_demo(config_path=args.config)
     else:
