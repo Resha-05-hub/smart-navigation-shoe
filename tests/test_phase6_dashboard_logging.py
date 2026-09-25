@@ -326,6 +326,32 @@ def test_11d_sensor_only_obstacle_confidence_display():
     assert "0%" not in Dashboard().render_cli(snapshot)
 
 
+def test_11e_direction_shown_and_logged(temp_log_dir):
+    """Test 11e: direction guidance appears in the CLI, the video overlay, and the CSV."""
+    from src.core.models import DirectionGuidance
+    from src.core.enums import DirectionCommand
+
+    obs = FusedObstacle("1", "person", 0.87, None, 0.8, ObstacleZone.CENTER, RiskLevel.WARNING)
+    guidance = DirectionGuidance(DirectionCommand.SLIGHT_LEFT, 1.0, "Center blocked. Veer slight left.")
+    snapshot = DashboardSnapshot.from_pipeline_results(
+        fused_obstacles=[obs], sensor_readings=[], overall_risk=RiskLevel.WARNING, direction=guidance
+    )
+    assert snapshot.alert_status.direction == "SLIGHT LEFT"
+    assert "Direction       : SLIGHT LEFT (Center blocked. Veer slight left.)" in Dashboard().render_cli(snapshot)
+
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    with_direction = Dashboard().render_video_overlay(frame, snapshot)
+    without_direction = Dashboard().render_video_overlay(frame, DashboardSnapshot())
+    assert with_direction.shape == frame.shape
+    assert with_direction[100:115].any() and not without_direction[100:115].any()
+
+    event_path, sys_path = temp_log_dir
+    logger = EventLogger(event_log_path=str(event_path), system_log_path=str(sys_path))
+    logger.log_event([obs], RiskLevel.WARNING, "BOTH - MEDIUM PULSE", "", force=True, direction="SLIGHT_LEFT")
+    with open(event_path, mode="r", encoding="utf-8") as f:
+        assert list(csv.DictReader(f))[0]["direction"] == "SLIGHT_LEFT"
+
+
 def test_12_duplicate_continuous_events_not_logged(temp_log_dir):
     """Test 12: Duplicate continuous events are not logged unnecessarily."""
     event_path, sys_path = temp_log_dir

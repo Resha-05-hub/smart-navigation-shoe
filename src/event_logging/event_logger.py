@@ -23,6 +23,7 @@ CSV_HEADERS = [
     "vibration_action",
     "voice_message",
     "alert_status",
+    "direction",
 ]
 
 
@@ -130,12 +131,14 @@ class EventLogger:
         voice_message: str,
         force: bool = False,
         alert_triggered: bool = False,
+        direction: str = "",
     ) -> bool:
         """Logs detection events to CSV and recent_events buffer if not duplicate continuous frame state.
 
         Args:
             voice_message: Message actually spoken this frame (empty when the voice alert was suppressed).
             alert_triggered: True if the alert manager spoke a voice alert this frame.
+            direction: Recommended navigation command, e.g. "SLIGHT_LEFT".
 
         Returns True if at least one new event row was written, False if debounced/skipped.
         """
@@ -169,6 +172,7 @@ class EventLogger:
                         vibration_action,
                         voice_message,
                         alert_status_str,
+                        direction,
                     ])
 
                 rec_ev = RecentEvent(
@@ -214,6 +218,7 @@ class EventLogger:
                             vibration_action,
                             voice_message,
                             alert_status_str,
+                            direction,
                         ])
 
                     rec_ev = RecentEvent(

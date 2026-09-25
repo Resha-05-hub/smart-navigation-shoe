@@ -134,6 +134,7 @@ risk_analysis:
 
 direction:
   clear_path_threshold: 2.0  # meters of clear space to recommend direction
+  side_hysteresis_m: 0.3     # keep the chosen escape side unless the other is this much clearer
 
 alerts:
   voice:

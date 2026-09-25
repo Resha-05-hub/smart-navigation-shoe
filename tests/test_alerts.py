@@ -7,8 +7,8 @@ from unittest.mock import MagicMock
 from src.alerts.simulated_vibration import SimulatedVibration
 from src.alerts.voice_alert import VoiceAlertManager
 from src.alerts.alert_manager import AlertManager
-from src.core.models import RiskAssessment, FusedObstacle, BoundingBox
-from src.core.enums import RiskLevel, ObstacleZone
+from src.core.models import RiskAssessment, FusedObstacle, BoundingBox, DirectionGuidance
+from src.core.enums import RiskLevel, ObstacleZone, DirectionCommand
 
 
 class TestPhase5AlertDebouncing(unittest.TestCase):
@@ -146,6 +146,92 @@ class TestPhase5AlertDebouncing(unittest.TestCase):
 
         self.alert_manager.evaluate_and_trigger(risk, [obs])
         self.assertFalse(self.alert_manager.last_alert_triggered)
+
+    def test_voice_message_includes_direction(self):
+        risk = RiskAssessment(overall_risk_level=RiskLevel.WARNING)
+        obs = FusedObstacle("1", "person", 0.91, None, 0.8, ObstacleZone.CENTER, RiskLevel.WARNING)
+        guidance = DirectionGuidance(DirectionCommand.SLIGHT_LEFT, 1.0, "Center blocked. Veer slight left.")
+
+        _, status = self.alert_manager.evaluate_and_trigger(risk, [obs], guidance)
+        self.assertEqual(
+            self.alert_manager.last_triggered_text,
+            "Warning. Obstacle ahead. Slow down. Move slightly left.",
+        )
+        self.mock_voice.speak.assert_called_with(
+            "Warning. Obstacle ahead. Slow down. Move slightly left.", non_blocking=True
+        )
+
+    def test_safe_message_has_no_direction(self):
+        self.assertEqual(
+            self.alert_manager.determine_voice_message(RiskLevel.SAFE, ObstacleZone.CENTER, DirectionCommand.MOVE_FORWARD),
+            "Path clear.",
+        )
+        self.assertEqual(
+            self.alert_manager.determine_voice_message(RiskLevel.DANGER, ObstacleZone.CENTER, DirectionCommand.STOP),
+            "Danger. Obstacle very close. Stop.",
+        )
+
+    def test_direction_change_bypasses_cooldown(self):
+        risk = RiskAssessment(overall_risk_level=RiskLevel.WARNING)
+        obs = FusedObstacle("1", "person", 0.91, None, 0.8, ObstacleZone.CENTER, RiskLevel.WARNING)
+        left = DirectionGuidance(DirectionCommand.SLIGHT_LEFT)
+        right = DirectionGuidance(DirectionCommand.SLIGHT_RIGHT)
+
+        self.alert_manager.evaluate_and_trigger(risk, [obs], left)
+        _, same = self.alert_manager.evaluate_and_trigger(risk, [obs], left)
+        self.assertIn("[ALERT SUPPRESSED]", same)
+
+        _, changed = self.alert_manager.evaluate_and_trigger(risk, [obs], right)
+        self.assertIn("[ALERT TRIGGERED]", changed)
+        self.assertIn("Move slightly right.", changed)
+
+    def test_flapping_back_to_previous_state_suppressed(self):
+        """A -> B -> A within the cooldown is threshold noise: the return to A is not re-announced."""
+        risk = RiskAssessment(overall_risk_level=RiskLevel.WARNING)
+        left = FusedObstacle("1", "wall", 0.9, None, 0.8, ObstacleZone.LEFT, RiskLevel.WARNING)
+        right = FusedObstacle("2", "wall", 0.9, None, 0.8, ObstacleZone.RIGHT, RiskLevel.WARNING)
+        straight = DirectionGuidance(DirectionCommand.MOVE_FORWARD)
+
+        _, a = self.alert_manager.evaluate_and_trigger(risk, [left], straight)
+        _, b = self.alert_manager.evaluate_and_trigger(risk, [right], straight)
+        _, back = self.alert_manager.evaluate_and_trigger(risk, [left], straight)
+        self.assertIn("[ALERT TRIGGERED]", a)
+        self.assertIn("[ALERT TRIGGERED]", b)
+        self.assertIn("Flapping", back)
+
+        # After the cooldown the current state is announced normally
+        self.alert_manager.last_triggered_time = time.time() - 1.5
+        _, later = self.alert_manager.evaluate_and_trigger(risk, [left], straight)
+        self.assertIn("[ALERT TRIGGERED]", later)
+
+    def test_escalation_is_never_treated_as_flapping(self):
+        warning = RiskAssessment(overall_risk_level=RiskLevel.WARNING)
+        danger = RiskAssessment(overall_risk_level=RiskLevel.DANGER)
+        near = FusedObstacle("1", "person", 0.9, None, 0.4, ObstacleZone.CENTER, RiskLevel.DANGER)
+        mid = FusedObstacle("1", "person", 0.9, None, 0.6, ObstacleZone.CENTER, RiskLevel.WARNING)
+
+        self.alert_manager.evaluate_and_trigger(danger, [near])
+        self.alert_manager.evaluate_and_trigger(warning, [mid])
+        _, again = self.alert_manager.evaluate_and_trigger(danger, [near])
+        self.assertIn("[ALERT TRIGGERED]", again)
+
+    def test_sensor_fault_announced_instead_of_path_clear(self):
+        fault = RiskAssessment(overall_risk_level=RiskLevel.CAUTION, faulty_zones=[ObstacleZone.CENTER])
+        guidance = DirectionGuidance(DirectionCommand.SLIGHT_RIGHT)
+
+        vib, status = self.alert_manager.evaluate_and_trigger(fault, [], guidance)
+        self.assertIn("[ALERT TRIGGERED]", status)
+        self.assertEqual(
+            self.alert_manager.last_triggered_text,
+            "Caution. Center sensor not responding. Move slightly right.",
+        )
+        self.assertEqual(vib, "VIBRATION: BOTH - SHORT PULSE")
+
+    def test_obstacle_more_severe_than_fault_takes_priority(self):
+        risk = RiskAssessment(overall_risk_level=RiskLevel.DANGER, faulty_zones=[ObstacleZone.LEFT])
+        obs = FusedObstacle("1", "person", 0.9, None, 0.4, ObstacleZone.CENTER, RiskLevel.DANGER)
+        self.alert_manager.evaluate_and_trigger(risk, [obs], DirectionGuidance(DirectionCommand.STOP))
+        self.assertEqual(self.alert_manager.last_triggered_text, "Danger. Obstacle very close. Stop.")
 
     def test_no_overlapping_tts_calls_worker(self):
         """Verify thread-safe VoiceAlertManager queue processes rapid calls without overlapping loops."""

@@ -2,8 +2,8 @@
 
 from typing import List, Optional, Dict, Any
 
-from ..core.models import FusedObstacle, RiskAssessment
-from ..core.enums import RiskLevel, ObstacleZone
+from ..core.models import FusedObstacle, RiskAssessment, SensorReading
+from ..core.enums import RiskLevel, ObstacleZone, SensorStatus
 from ..utils.logger import get_logger
 
 logger = get_logger("risk_analyzer")
@@ -93,16 +93,27 @@ class RiskAnalyzer:
         else:
             return RiskLevel.SAFE
 
-    def evaluate(self, obstacles: List[FusedObstacle]) -> RiskAssessment:
+    def evaluate(
+        self,
+        obstacles: List[FusedObstacle],
+        sensor_readings: Optional[List[SensorReading]] = None,
+    ) -> RiskAssessment:
         """Evaluates all fused obstacles to generate an overall system RiskAssessment.
 
         Args:
             obstacles: List of FusedObstacle instances.
+            sensor_readings: Optional readings; a failed sensor (INVALID) means that zone is unknown,
+                so overall risk is raised to at least CAUTION. OUT_OF_RANGE (no echo) counts as clear.
 
         Returns:
             RiskAssessment object containing overall risk rating and critical threat items.
         """
-        if not obstacles:
+        faulty_zones = [
+            r.position for r in (sensor_readings or [])
+            if r.status == SensorStatus.INVALID and r.position != ObstacleZone.UNKNOWN
+        ]
+
+        if not obstacles and not faulty_zones:
             return RiskAssessment(
                 overall_risk_level=RiskLevel.SAFE,
                 critical_obstacles=[],
@@ -122,6 +133,9 @@ class RiskAnalyzer:
             if risk in (RiskLevel.DANGER, RiskLevel.WARNING, RiskLevel.HIGH, RiskLevel.CRITICAL):
                 critical_items.append(obs)
 
+        if faulty_zones and RISK_PRIORITY[highest_risk] < RISK_PRIORITY[RiskLevel.CAUTION]:
+            highest_risk = RiskLevel.CAUTION
+
         action_messages = {
             RiskLevel.DANGER: "DANGER! Immediate obstacle ahead. Stop movement.",
             RiskLevel.CRITICAL: "CRITICAL! Immediate danger detected.",
@@ -133,8 +147,13 @@ class RiskAnalyzer:
             RiskLevel.SAFE: "Path clear.",
         }
 
+        recommended_action = action_messages.get(highest_risk, "Proceed with caution.")
+        if faulty_zones:
+            recommended_action += " Sensor fault: " + ", ".join(z.value for z in faulty_zones) + "."
+
         return RiskAssessment(
             overall_risk_level=highest_risk,
             critical_obstacles=critical_items,
-            recommended_action=action_messages.get(highest_risk, "Proceed with caution."),
+            recommended_action=recommended_action,
+            faulty_zones=faulty_zones,
         )

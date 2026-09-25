@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import List, Optional, Union, Dict
 import time
 
-from src.core.models import FusedObstacle, SensorReading
+from src.core.models import FusedObstacle, SensorReading, DirectionGuidance
 from src.core.enums import RiskLevel, ObstacleZone, SensorStatus
 
 
@@ -60,6 +60,8 @@ class AlertStatusSummary:
     """Current alert system state summary."""
     vibration_action: str = "OFF"
     voice_message: str = "Path clear. Safe to proceed."
+    direction: str = ""       # e.g. "SLIGHT LEFT"
+    direction_note: str = ""  # e.g. "Center blocked. Veer slight left."
 
 
 @dataclass
@@ -89,6 +91,7 @@ class DashboardSnapshot:
         sensors_status: str = "ACTIVE (SIMULATED)",
         sensor_mode: str = "SIMULATED",
         controls_hint: str = "",
+        direction: Optional[DirectionGuidance] = None,
     ) -> "DashboardSnapshot":
         """Factory method to construct snapshot from raw pipeline outputs."""
         risk_str = overall_risk.value if isinstance(overall_risk, RiskLevel) else str(overall_risk)
@@ -141,6 +144,9 @@ class DashboardSnapshot:
             vibration_action=vibration_action,
             voice_message=voice_message,
         )
+        if direction is not None:
+            alert_summary.direction = direction.recommended_direction.value.replace("_", " ")
+            alert_summary.direction_note = direction.safety_notes
 
         return cls(
             system_status=sys_status,

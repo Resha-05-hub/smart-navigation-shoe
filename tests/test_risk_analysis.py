@@ -3,8 +3,8 @@
 import unittest
 
 from src.decision.risk_analyzer import RiskAnalyzer
-from src.core.models import FusedObstacle, BoundingBox
-from src.core.enums import RiskLevel, ObstacleZone
+from src.core.models import FusedObstacle, BoundingBox, SensorReading
+from src.core.enums import RiskLevel, ObstacleZone, SensorStatus
 
 
 class TestRiskAnalysisArchitecture(unittest.TestCase):
@@ -48,6 +48,31 @@ class TestRiskAnalysisArchitecture(unittest.TestCase):
         self.assertEqual(assessment.overall_risk_level, RiskLevel.CRITICAL)
         self.assertEqual(len(assessment.critical_obstacles), 1)
         self.assertIn("Immediate danger", assessment.recommended_action)
+
+
+class TestSensorFaultRisk(unittest.TestCase):
+    """A failed sensor means unknown space, never a silent SAFE."""
+
+    def test_faulty_sensor_raises_risk_to_caution(self):
+        readings = [
+            SensorReading(3.0, position=ObstacleZone.LEFT),
+            SensorReading(-1.0, position=ObstacleZone.CENTER, status=SensorStatus.INVALID, is_valid=False),
+        ]
+        assessment = RiskAnalyzer().evaluate([], readings)
+        self.assertEqual(assessment.overall_risk_level, RiskLevel.CAUTION)
+        self.assertEqual(assessment.faulty_zones, [ObstacleZone.CENTER])
+        self.assertIn("Sensor fault: CENTER", assessment.recommended_action)
+
+    def test_fault_does_not_lower_higher_risk(self):
+        obs = FusedObstacle("1", "person", 0.9, None, 0.4, ObstacleZone.CENTER)
+        readings = [SensorReading(-1.0, position=ObstacleZone.LEFT, status=SensorStatus.INVALID, is_valid=False)]
+        self.assertEqual(RiskAnalyzer().evaluate([obs], readings).overall_risk_level, RiskLevel.DANGER)
+
+    def test_out_of_range_is_not_a_fault(self):
+        readings = [SensorReading(5.0, position=ObstacleZone.RIGHT, status=SensorStatus.OUT_OF_RANGE, is_valid=False)]
+        assessment = RiskAnalyzer().evaluate([], readings)
+        self.assertEqual(assessment.overall_risk_level, RiskLevel.SAFE)
+        self.assertEqual(assessment.faulty_zones, [])
 
 
 if __name__ == "__main__":

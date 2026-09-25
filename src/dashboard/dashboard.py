@@ -51,6 +51,10 @@ class Dashboard:
         lines.append("")
         lines.append(f"Vibration       : {snapshot.alert_status.vibration_action}")
         lines.append(f"Voice           : {snapshot.alert_status.voice_message}")
+        if snapshot.alert_status.direction:
+            lines.append(
+                f"Direction       : {snapshot.alert_status.direction} ({snapshot.alert_status.direction_note})"
+            )
         lines.append("")
         lines.append("SENSOR STATUS")
         lines.append("")
@@ -91,7 +95,7 @@ class Dashboard:
         h, w, _ = annotated.shape
 
         # Create dark overlay bar at the top of the video frame
-        overlay_height = 95
+        overlay_height = 118 if snapshot.alert_status.direction else 95
         overlay = annotated.copy()
         cv2.rectangle(overlay, (0, 0), (w, overlay_height), (15, 15, 15), -1)
         cv2.addWeighted(overlay, 0.75, annotated, 0.25, 0, annotated)
@@ -159,5 +163,18 @@ class Dashboard:
             1,
             cv2.LINE_AA,
         )
+
+        # Direction guidance
+        if snapshot.alert_status.direction:
+            cv2.putText(
+                annotated,
+                f"GO: {snapshot.alert_status.direction}",
+                (15, 106),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.55,
+                (255, 255, 0),
+                2,
+                cv2.LINE_AA,
+            )
 
         return annotated

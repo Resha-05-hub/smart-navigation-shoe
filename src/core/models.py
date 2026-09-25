@@ -112,6 +112,7 @@ class RiskAssessment:
     critical_obstacles: List[FusedObstacle] = field(default_factory=list)
     recommended_action: str = ""
     timestamp: float = field(default_factory=time.time)
+    faulty_zones: List[ObstacleZone] = field(default_factory=list)  # Zones whose distance sensor failed
 
 
 @dataclass

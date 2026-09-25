@@ -87,10 +87,7 @@ class SmartNavigationShoeApp:
         # 5. Initialize Decision Engine (Risk & Direction Analyzers)
         self.risk_analyzer = RiskAnalyzer(config=self.config)
 
-        dir_cfg = self.config.get("direction", {})
-        self.direction_analyzer = DirectionAnalyzer(
-            clear_path_threshold_m=dir_cfg.get("clear_path_threshold", 2.0)
-        )
+        self.direction_analyzer = DirectionAnalyzer(config=self.config)
 
         # 6. Initialize Alert System
         alert_cfg = self.config.get("alerts", {})
@@ -144,8 +141,9 @@ class SmartNavigationShoeApp:
             detections=detection_result.detections,
             sensor_readings=sensor_readings,
         )
-        risk_assessment = self.risk_analyzer.evaluate(fused_obstacles)
-        vib_text, alert_status = self.alert_manager.evaluate_and_trigger(risk_assessment, fused_obstacles)
+        risk_assessment = self.risk_analyzer.evaluate(fused_obstacles, sensor_readings)
+        direction = self.direction_analyzer.analyze_path(fused_obstacles, risk_assessment, sensor_readings)
+        vib_text, alert_status = self.alert_manager.evaluate_and_trigger(risk_assessment, fused_obstacles, direction)
 
         primary_dist = sensor_readings[0].distance_m if sensor_readings else 0.0
         self.logger.info(
@@ -279,6 +277,7 @@ def run_realtime_fusion(
 
     fusion_engine = SensorFusionEngine(config=config)
     risk_analyzer = RiskAnalyzer(config=config)
+    direction_analyzer = DirectionAnalyzer(config=config)
 
     vibration = SimulatedVibration(enabled=True)
     voice = VoiceAlertManager(enabled=True)
@@ -308,10 +307,11 @@ def run_realtime_fusion(
             )
             sensor_readings = sensor_manager.get_readings_list()
             fused_obstacles = fusion_engine.fuse(detection_result.detections, sensor_readings)
-            risk_assessment = risk_analyzer.evaluate(fused_obstacles)
+            risk_assessment = risk_analyzer.evaluate(fused_obstacles, sensor_readings)
+            direction = direction_analyzer.analyze_path(fused_obstacles, risk_assessment, sensor_readings)
 
             # Trigger Alerts (Vibration simulation + Voice alert debouncing)
-            vib_text, alert_status = alert_manager.evaluate_and_trigger(risk_assessment, fused_obstacles)
+            vib_text, alert_status = alert_manager.evaluate_and_trigger(risk_assessment, fused_obstacles, direction)
 
             current_time = time.time()
             if fused_obstacles and (current_time - last_logged_time > 1.5):
@@ -495,6 +495,7 @@ def run_dashboard_mode(
 
     fusion_engine = SensorFusionEngine(config=config)
     risk_analyzer = RiskAnalyzer(config=config)
+    direction_analyzer = DirectionAnalyzer(config=config)
 
     vibration = SimulatedVibration(enabled=True)
     voice = VoiceAlertManager(enabled=True)
@@ -528,9 +529,10 @@ def run_dashboard_mode(
             )
             sensor_readings = sensor_manager.get_readings_list()
             fused_obstacles = fusion_engine.fuse(detection_result.detections, sensor_readings)
-            risk_assessment = risk_analyzer.evaluate(fused_obstacles)
+            risk_assessment = risk_analyzer.evaluate(fused_obstacles, sensor_readings)
+            direction = direction_analyzer.analyze_path(fused_obstacles, risk_assessment, sensor_readings)
 
-            vib_action, _alert_status = alert_manager.evaluate_and_trigger(risk_assessment, fused_obstacles)
+            vib_action, _alert_status = alert_manager.evaluate_and_trigger(risk_assessment, fused_obstacles, direction)
             vib_text = vib_action.replace("VIBRATION: ", "")
             alert_triggered = alert_manager.last_alert_triggered
 
@@ -541,6 +543,7 @@ def run_dashboard_mode(
                 vibration_action=vib_text,
                 voice_message=alert_manager.last_triggered_text if alert_triggered else "",
                 alert_triggered=alert_triggered,
+                direction=direction.recommended_direction.value,
             )
 
             # Build Dashboard Snapshot (voice line shows the last message the user heard)
@@ -556,6 +559,7 @@ def run_dashboard_mode(
                 sensors_status="ACTIVE (SIMULATED)",
                 sensor_mode=scenario_engine.status_text,
                 controls_hint=CONTROLS_HELP,
+                direction=direction,
             )
 
             # Redraw ASCII terminal dashboard in place periodically
@@ -617,6 +621,7 @@ def run_scenario_mode(config_path: str = "config/config.yaml", scenario: Optiona
     event_logger = EventLogger(config=config)
     fusion_engine = SensorFusionEngine(config=config)
     risk_analyzer = RiskAnalyzer(config=config)
+    direction_analyzer = DirectionAnalyzer(config=config)
     vibration = SimulatedVibration(enabled=True)
     voice = VoiceAlertManager(enabled=True)
     alert_manager = AlertManager(vibration=vibration, voice=voice, config=config)
@@ -634,9 +639,12 @@ def run_scenario_mode(config_path: str = "config/config.yaml", scenario: Optiona
                 scenario_engine.update()
                 sensor_readings = sensor_manager.get_readings_list()
                 fused_obstacles = fusion_engine.fuse([], sensor_readings)
-                risk_assessment = risk_analyzer.evaluate(fused_obstacles)
+                risk_assessment = risk_analyzer.evaluate(fused_obstacles, sensor_readings)
+                direction = direction_analyzer.analyze_path(fused_obstacles, risk_assessment, sensor_readings)
 
-                vib_action, _alert_status = alert_manager.evaluate_and_trigger(risk_assessment, fused_obstacles)
+                vib_action, _alert_status = alert_manager.evaluate_and_trigger(
+                    risk_assessment, fused_obstacles, direction
+                )
                 vib_text = vib_action.replace("VIBRATION: ", "")
                 alert_triggered = alert_manager.last_alert_triggered
 
@@ -646,6 +654,7 @@ def run_scenario_mode(config_path: str = "config/config.yaml", scenario: Optiona
                     vibration_action=vib_text,
                     voice_message=alert_manager.last_triggered_text if alert_triggered else "",
                     alert_triggered=alert_triggered,
+                    direction=direction.recommended_direction.value,
                 )
 
                 snapshot = DashboardSnapshot.from_pipeline_results(
@@ -660,6 +669,7 @@ def run_scenario_mode(config_path: str = "config/config.yaml", scenario: Optiona
                     sensors_status="ACTIVE (SIMULATED)",
                     sensor_mode=f"{scenario_engine.status_text} [{index}/{len(names)}]",
                     controls_hint=f"{scenario_engine.scenarios[name].description} | Ctrl+C to stop",
+                    direction=direction,
                 )
                 dashboard.display_cli(snapshot, clear_screen=True)
                 time.sleep(tick_s)
