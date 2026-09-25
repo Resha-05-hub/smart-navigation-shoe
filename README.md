@@ -2,270 +2,246 @@
 
 ## Project Overview
 
-The **AI-Powered Smart Navigation Shoe** is an assistive device designed to provide real-time spatial awareness, obstacle detection, collision hazard warning, and directional navigation guidance for visually impaired individuals.
+The **AI-Powered Smart Navigation Shoe** is an assistive-device prototype that gives real-time obstacle
+detection, collision-risk warnings, and directional guidance to visually impaired users. It combines
+**computer vision (YOLOv8)** with **distance sensing** through **sensor fusion**, and responds with
+**voice instructions** and **directional haptic vibration**.
 
-By combining low-latency **Computer Vision (YOLOv8)** with **Distance Sensors (Ultrasonic Rangefinders)** through **Sensor Fusion**, the system detects both elevated and low-level ground obstacles, evaluates collision risks, and delivers non-intrusive feedback via **Voice Audio Announcements** and **Haptic Vibration Actuators**.
+This repository is a **software-only demonstration**, approved by our faculty: there is no Raspberry Pi,
+no ultrasonic sensors, and no vibration motors. The camera and object detection are real; the shoe's
+hardware is simulated in software and clearly labelled as such everywhere it appears.
 
 > [!WARNING]
-> **Assistive-Device Research Prototype Disclaimer**:
-> This software is an experimental assistive-device research prototype developed for educational and academic project purposes. It is **NOT** a safety-certified, medical-grade, or life-critical navigation system. Computer vision object detection alone does **NOT** provide 3D distance calculation—distances in current laptop simulation phases are provided by simulated range sensors. Users must not rely solely on this prototype for primary navigation in hazards or outdoor traffic.
+> **Research prototype disclaimer.** This is an educational project. It is **not** a safety-certified,
+> medical-grade, or life-critical navigation system and must not be relied on for real navigation.
+> Distances in this demonstration come from **simulated** sensors, including distances **estimated** from
+> the camera image; they are approximations, not measurements.
 
 ---
 
 ## Problem Statement
 
 Visually impaired individuals face significant daily mobility challenges:
-* Standard white canes cannot detect elevated or hanging obstacles (e.g., open cabinet doors, low-hanging tree branches, truck beds).
-* Guide dogs require extensive training, high maintenance costs, and are not universally accessible.
-* Existing wearable sensors often lack object classification abilities—they signal distance but cannot distinguish between a harmless curtain and a dangerous flight of stairs or approaching vehicle.
-
----
+* Standard white canes cannot detect elevated or hanging obstacles (open cabinet doors, branches, truck beds).
+* Guide dogs require extensive training and maintenance and are not universally accessible.
+* Many wearable sensors signal distance but cannot tell *what* an obstacle is — a curtain or a person or a vehicle.
 
 ## Proposed Solution
 
-The Smart Navigation Shoe integrates multi-modal sensing on a wearable footgear platform:
-1. **Camera Module**: Captures forward environmental imagery for deep-learning-based object detection.
-2. **Ultrasonic Range Sensors**: Provides distance measurements across three spatial zones (`LEFT`, `CENTER`, `RIGHT`).
-3. **Sensor Fusion Engine**: Correlates visual bounding boxes with physical range readings to establish true object spatial positioning and distance.
-4. **Risk & Direction Analyzer**: Calculates real-time collision threats and evaluates safe detour trajectories.
-5. **Multi-Modal Feedback**: Delivers immediate directional vibration pulses to the shoe and clear voice instructions via earphones.
-6. **Real-Time Dashboard & Persistent Event Logger**: Monitors system status, live multi-object detections, risk assessments, alert triggers, and records events to persistent CSV and log files without duplicate frame spam.
+A shoe-mounted system that:
+1. **Camera + YOLOv8** identifies obstacles and which zone they are in (LEFT / CENTER / RIGHT).
+2. **Three ultrasonic sensors** on the toe measure distance per zone — including low obstacles the camera misses.
+3. **Sensor fusion** attaches each zone's distance to what the camera sees.
+4. **Risk and direction analysis** grades each hazard and chooses a safe way to go.
+5. **Feedback**: directional vibration on the side of the obstacle, and voice instructions such as
+   *"Warning. Obstacle ahead. Slow down. Move slightly left."*
+6. **Dashboard and event log** show and record everything for evaluation.
 
 ---
 
-## Development Phases & System Status
+## What Is Real vs. Simulated
 
-| Phase | Description | Implementation Status |
+| Component | In this demo | Notes |
 |---|---|---|
-| **Phase 1** | Base Architecture & System Abstractions | ✅ Completed (12/12 Tests Passing) |
-| **Phase 2** | Real-Time Laptop Webcam + YOLO Object Detection | ✅ Completed (Real Camera + YOLOv8) |
-| **Phase 3** | Simulated LEFT / CENTER / RIGHT Distance Sensors | ✅ Completed (Sensor Manager + Status Logic) |
-| **Phase 4** | Sensor Fusion & Risk Analysis Pipeline | ✅ Completed (YOLO Zone + Distance Mapping + Risk) |
-| **Phase 5** | Multi-Modal Alert System (Vibration & Voice) | ✅ Completed (Thread-Safe TTS + Cooldown + Haptic Simulation) |
-| **Phase 6** | Real-Time Dashboard & Persistent Event Logging | ✅ Completed (Terminal + OpenCV Overlay + CSV Logging, 50/50 Tests Passing) |
-| **Phase 7** | System Performance & Low-Latency Optimization | ⏳ Upcoming |
-| **Phase 8** | Raspberry Pi Hardware & GPIO Integration | ⏳ Upcoming |
+| Camera | **Real** (laptop webcam) | Or a video file / image folder via `--source`; automatic fallback if the webcam fails |
+| Object detection | **Real** YOLOv8n (Ultralytics) | 80 COCO classes, filtered to navigation-relevant ones |
+| Object tracking | **Real** | IoU tracker with stable IDs (`person #3`) |
+| Ultrasonic sensors ×3 | **Simulated** | Driven by camera-linked estimates, keyboard, or scripted scenarios |
+| Sensor fusion, risk, direction | **Real logic** | Same code the hardware version would run |
+| Voice alerts | **Real** (offline Windows TTS via pyttsx3) | |
+| Vibration motors ×2 | **Simulated** | Drawn on screen, blinking in the real pulse rhythm |
+| Raspberry Pi GPIO | **Placeholder** | Interfaces and pin maps are ready for Phase 8 |
 
 ---
 
-## Data Flow & System Pipeline Architecture
+## Quick Start (Windows)
 
-### Current Laptop Prototype Pipeline (Phases 1–6)
+```powershell
+# 1. Install dependencies into the project virtual environment (Python 3.11)
+py -3.11 -m venv venvv                      # only if venvv does not exist yet
+venvv\Scripts\python.exe -m pip install -r requirements.txt
+
+# 2. Create the demo video used as a webcam fallback (about 5 MB, not stored in git)
+venvv\Scripts\python.exe scripts\make_demo_video.py
+
+# 3. Run the full demonstration (dashboard mode is the default)
+venvv\Scripts\python.exe -m src.main
+```
+
+The first launch loads YOLO (about 5–10 s). Press **`q`** or **`ESC`** in the video window to exit.
+
+---
+
+## Execution Modes
+
+| Command | What it shows |
+|---|---|
+| `venvv\Scripts\python.exe -m src.main` | **Dashboard** (default): video with risk-coloured boxes and zone lines, simulated shoe panel, terminal dashboard, voice, CSV logging |
+| `... -m src.main --source demo\approach_demo.mp4` | Same, from a video file instead of the webcam (also accepts an image or a folder of images) |
+| `... -m src.main --scenario approaching_obstacle` | Dashboard with a scripted sensor scenario running |
+| `... -m src.main --mode scenario` | **No camera needed**: plays every scripted scenario through the full pipeline, with the shoe panel in a window |
+| `... -m src.main --mode scenario --scenario sensor_fault` | One scenario only |
+| `... -m src.main --mode fusion` | Full pipeline with console output instead of the dashboard |
+| `... -m src.main --mode detection` | Raw YOLO detection only |
+| `... -m src.main --mode alerts` | Vibration + voice alert demonstration (no camera) |
+| `... -m src.main --mode sensors` | Simulated sensor readings and validation (no camera) |
+| `... -m src.main --mode architecture` | Three steps of the whole architecture, then exit |
+
+Scenarios: `approaching_obstacle`, `passing_left_then_right`, `narrow_corridor`, `mixed_zones`, `sensor_fault`
+(defined in `config/config.yaml`; add your own as keyframes).
+
+### Keyboard Controls (dashboard and fusion windows)
+
+Click the video window first so it receives key presses.
+
+| Key | Action |
+|---|---|
+| `a` / `z` | LEFT obstacle closer / farther (10 cm per press) |
+| `s` / `x` | CENTER obstacle closer / farther |
+| `d` / `c` | RIGHT obstacle closer / farther |
+| `v` | Toggle camera-linked sensors (distances from the camera) |
+| `0` | Clear path (all sensors at maximum range) |
+| `r` | Reset to the startup mode |
+| `n` | Start the next scripted scenario |
+| `p` | Pause / resume the scenario |
+| `q` / `ESC` | Quit |
+
+---
+
+## Faculty Demonstration Script (about 6 minutes)
+
+1. **Explain the scope (30 s).** Show the *What Is Real vs. Simulated* table. The side panel is titled
+   "SIMULATED SHOE – software demo, no hardware".
+2. **Live camera, camera-linked sensors (2 min).** Run `venvv\Scripts\python.exe -m src.main`.
+   Start about 3 m from the webcam and walk toward it. Point out:
+   the box turning yellow → orange → red, the CENTER cone shrinking, the motors blinking faster,
+   the arrow changing to **STOP**, and the voice: *"Caution…", "Warning… Move slightly right", "Danger… Stop."*
+   Step to one side: the guidance switches to steering away from that side.
+3. **Obstacles the camera cannot see (1 min).** Press `s` repeatedly: the CENTER sensor reports an
+   unidentified `obstacle` although YOLO sees nothing — this is why the shoe has distance sensors.
+   Press `0` to clear, `v` to return to camera-linked mode.
+4. **Sensor failure (1 min).** Press `q`, then run `venvv\Scripts\python.exe -m src.main --mode scenario --scenario sensor_fault`.
+   The CENTER cone turns grey (FAULT) and the voice says *"Caution. Center sensor not responding."* —
+   the system never claims the path is clear when it cannot know.
+5. **Evidence (1 min).** Open `logs\detection_events.csv`: every spoken alert with time, object, zone,
+   distance, risk, vibration, and direction. Run the test suite (below) to show 179 passing tests.
+
+**If the webcam fails at the venue**, the demo video plays automatically (`camera.fallback_source`), or run
+`--source demo\approach_demo.mp4`. `--mode scenario` needs no camera at all.
+
+---
+
+## How It Works
+
 ```text
-Laptop Webcam
-    │
-    ▼
-YOLO Object Detection (Ultralytics YOLOv8)
-    │
-    ▼
-Object Spatial Position / Zone Determination (LEFT, CENTER, RIGHT)
-    │
-    ▼
-Simulated Distance Sensor Association (SensorManager)
-    │
-    ▼
-Sensor Fusion Engine (FusedObstacle Data Structure)
-    │
-    ▼
-Risk Analysis Engine (DANGER, WARNING, CAUTION, SAFE Classification)
-    │
-    ▼
-Alert Manager (Debouncing & Alert Cooldown Evaluation)
-    │
-    ├─────────────────────────────────────────┼─────────────────────────────────────────┐
-    ▼                                         ▼                                         ▼
-Simulated Directional Vibration           Offline pyttsx3 Voice Speech              Real-Time Dashboard & Event Logger
-(Console Log: LEFT / BOTH / RIGHT)       (Thread-Safe Queue Worker)               (CLI + Video Overlay + CSV Logs)
+Camera / video file ──► YOLOv8 detection ──► IoU object tracker
+                                                   │
+                  ┌────────────────────────────────┤
+                  ▼                                ▼
+   Simulated ultrasonic sensors ◄── camera-linked estimates / keyboard / scripted scenarios
+          (LEFT, CENTER, RIGHT)
+                  │
+                  ▼
+           Sensor fusion  ──►  Risk analysis  ──►  Direction guidance  ──►  Alert manager
+     (zone distance per object;   (thresholds +       (steer / stop;          ├─ Simulated vibration
+      sensor-only obstacles)       hysteresis;         hysteresis)             ├─ Voice (pyttsx3)
+                                   sensor faults)                              └─ Dashboard + CSV / log
 ```
+
+| Stage | Behaviour |
+|---|---|
+| **Detection** (`src/detection/yolo_detector.py`) | YOLOv8n on CPU (~80 ms/frame after warm-up), filtered to `detection.target_classes`, zone from the box centre |
+| **Tracking** (`src/detection/object_tracker.py`) | Class-aware IoU matching; objects confirmed after 2 sightings, kept through 3 missed frames, boxes smoothed |
+| **Simulated sensors** (`src/sensors/scenario_engine.py`) | *Camera-linked* (default): each zone reads the nearest tracked object's distance, estimated as `real_size × focal_px ÷ box_px` (`vision_distance_estimator.py`). *Manual*: keyboard. *Scenario*: timed keyframes, including sensor faults. ±1 cm noise mimics real ultrasonic readings |
+| **Fusion** (`src/fusion/sensor_fusion.py`) | Each detection takes its zone's distance; a close reading in a zone with no detection becomes an unidentified `obstacle` |
+| **Risk** (`src/decision/risk_analyzer.py`) | ≤ 50 cm DANGER, ≤ 100 cm WARNING, ≤ 200 cm CAUTION, else SAFE. Rises immediately, falls only 10 cm past a threshold (no flicker). A failed sensor raises risk to at least CAUTION |
+| **Direction** (`src/decision/direction_analyzer.py`) | STOP for danger ahead; otherwise keep straight, move slightly left/right, or turn. Never steers into a zone with a failed sensor; keeps its chosen side unless the other is 30 cm clearer |
+| **Alerts** (`src/alerts/alert_manager.py`) | Describes the most severe obstacle. Speaks immediately on change, repeats every 2 s while a hazard persists, suppresses A→B→A flapping, and says "Path clear" only after 1 s clear |
+| **Dashboard** (`src/dashboard/`) | Video with risk-coloured boxes, zone lines, and status strip; simulated shoe panel (sensor cones, motors, direction, FPS); terminal dashboard |
+| **Logging** (`src/event_logging/`) | `logs/detection_events.csv` (debounced events, spoken text, alert status, direction); `logs/system.log` (component logs) |
+
+The per-frame wiring is in `src/pipeline.py` (`NavigationPipeline`), shared by every mode.
 
 ---
 
-## PHASE 6 — DASHBOARD & EVENT LOGGING
+## Configuration (`config/config.yaml`)
 
-### 1. Real-Time System Dashboard
-The system dashboard displays real-time telemetry from camera, vision model, simulated distance sensors, detected objects, confidence, spatial zones, distances, risk levels, and alert states:
-
-```
---------------------------------------------------
-    SMART NAVIGATION SHOE
---------------------------------------------------
-SYSTEM STATUS
-
-Camera          : CONNECTED
-YOLO            : ACTIVE
-Sensors         : ACTIVE (SIMULATED)
-
-CURRENT DETECTION
-
-Object       Confidence    Zone       Distance    Risk
-person       87%           CENTER     80 cm       WARNING
-chair        65%           LEFT       150 cm      CAUTION
-
-ALERT STATUS
-
-Vibration       : BOTH - MEDIUM PULSE
-Voice           : Warning. Obstacle ahead. Slow down.
-
-SENSOR STATUS
-
-LEFT            : 150 cm     HEALTHY
-CENTER          : 80 cm      HEALTHY
-RIGHT           : 220 cm     HEALTHY
-
-RECENT EVENTS
-
-Time       Object      Zone      Distance    Risk
-10:21:04   person      CENTER    80 cm       WARNING
-10:21:08   chair       LEFT      150 cm      CAUTION
-10:21:12   suitcase    RIGHT     220 cm      SAFE
---------------------------------------------------
-```
-
-### 2. Persistent Event Logging (`logs/detection_events.csv`)
-Events are logged to structured CSV format for analysis and demonstration:
-
-* **File**: `logs/detection_events.csv`
-* **Columns**: `timestamp`, `object_name`, `confidence`, `zone`, `distance_cm`, `risk_level`, `vibration_action`, `voice_message`
-* **Deduplication Rule**: Identical consecutive frame events are debounced to prevent duplicate log spam. New logs are triggered only when a new detection occurs, risk changes, zone changes, alert triggers, or heartbeat interval expires.
-
-### 3. System Logging (`logs/system.log`)
-Maintains operational system logs including camera connection, YOLO model loading, sensor status, alert triggers, and clean shutdown events.
+| Setting | Default | Purpose |
+|---|---|---|
+| `system.mode` | `dashboard` | Mode used when `--mode` is not given |
+| `camera.device_id` / `fallback_source` | `0` / `demo/approach_demo.mp4` | Webcam, and video played if it cannot be opened |
+| `detection.target_classes` | person, car, chair, … | COCO classes that count as obstacles |
+| `sensors.simulation.startup` | `camera` | `camera`, `manual`, or a scenario name |
+| `sensors.simulation.camera_linked.horizontal_fov_deg` | `60` | Webcam field of view — tune if estimated distances read consistently off |
+| `risk_analysis.thresholds_cm` | 50 / 100 / 200 | DANGER / WARNING / CAUTION limits |
+| `risk_analysis.hysteresis_cm` | `10` | Margin before risk is lowered |
+| `alerts.voice.cooldown_seconds` | `2.0` | Reminder interval while a hazard persists |
+| `alerts.voice.enabled` | `true` | Turn speech off (e.g. in a quiet room) |
+| `tracking.min_hits` | `2` | Sightings before an object is reported |
+| `dashboard.show_side_panel` | `true` | Simulated shoe panel beside the video (window ≈ 900 px wide) |
 
 ---
 
-## Command-Line Execution Modes
+## Running Tests
 
-### 1. Run Phase 6 Real-Time Dashboard & Event Logging Mode
-Launches live webcam stream, YOLO detection, simulated distance sensors, sensor fusion, risk assessment, alert debouncing, live ASCII terminal dashboard, OpenCV overlay, and persistent CSV event logging:
-```bash
-py -3.11 -m src.main --mode dashboard
-```
-*(Press **`q`** or **`ESC`** on the camera display window to exit).*
-
-### 2. Run Real-Time Webcam Sensor Fusion & Alert Pipeline (Phase 4 & 5)
-```bash
-py -3.11 -m src.main --mode fusion
+```powershell
+venvv\Scripts\python.exe -m pytest
 ```
 
-### 3. Run Phase 5 Alert System Demonstration
-```bash
-py -3.11 -m src.main --mode alerts
-```
-
-### 4. Run Real-Time Webcam YOLO Detection Only (Phase 2)
-```bash
-py -3.11 -m src.main --mode detection
-```
-
-### 5. Run Distance Sensor Demonstration (Phase 3)
-```bash
-py -3.11 -m src.main --mode sensors
-```
-
-### 6. Run System Architecture Simulation Loop (Phase 1)
-```bash
-py -3.11 -m src.main --mode simulation
-```
-
----
-
-## Running Unit Tests
-
-Run `pytest` to execute all 50 unit tests across Phases 1–6:
-```bash
-py -3.11 -m pytest
-```
+179 tests cover detection parsing, tracking, simulated sensors and scenarios, distance estimation, fusion,
+risk hysteresis, sensor faults, direction guidance, alert debouncing, dashboard rendering, event logging,
+video input, and configuration consistency. Tests use mocks and generated frames; no webcam is needed.
 
 ---
 
 ## Project Structure
 
-```
+```text
 smart-navigation-shoe/
-│
-├── README.md                  # Project documentation & Phase 6 guide
-├── requirements.txt           # Python package dependencies
-├── .gitignore                 # Version control exclusion rules
-│
-├── config/
-│   └── config.yaml            # Configurable parameters, dashboard & logging settings
-│
-├── logs/                      # Log directory (auto-created)
-│   ├── detection_events.csv   # Persistent CSV event log
-│   └── system.log             # Application operational log
-│
-├── models/
-│   └── README.md              # Machine learning model weights directory
-│
+├── config/config.yaml            # All settings, scenarios, and thresholds
+├── demo/                         # Demo media (README; generated/recorded videos are not in git)
+├── logs/                         # detection_events.csv and system.log (created at runtime)
+├── models/yolov8n.pt             # YOLOv8 nano weights
+├── scripts/make_demo_video.py    # Builds demo/approach_demo.mp4
 ├── src/
-│   ├── __init__.py
-│   ├── main.py                # Main application entry point (--mode dashboard | fusion | alerts | detection)
-│   │
-│   ├── dashboard/             # Real-time dashboard module
-│   │   ├── __init__.py
-│   │   ├── dashboard.py       # ASCII terminal & OpenCV video overlay renderer
-│   │   └── dashboard_data.py  # Snapshot dataclasses & pipeline formatting
-│   │
-│   ├── event_logging/         # Persistent event & system logging module
-│   │   ├── __init__.py
-│   │   └── event_logger.py    # Debounced CSV detection logger & system log writer
-│   │
-│   ├── camera/                # Camera capture abstraction layer
-│   │   ├── __init__.py
-│   │   ├── camera_interface.py       # ABC for camera inputs
-│   │   ├── webcam_camera.py          # Real OpenCV webcam driver
-│   │   └── raspberry_pi_camera.py    # Future Pi CSI camera driver shell
-│   │
-│   ├── detection/             # Vision detection layer
-│   │   ├── __init__.py
-│   │   ├── detector_interface.py     # ABC for object detectors
-│   │   ├── yolo_detector.py          # Real Ultralytics YOLOv8 detector & visualizer
-│   │   └── detection_result.py       # Dataclass encapsulating detection outputs
-│   │
-│   ├── sensors/               # Range sensor abstraction layer
-│   │   ├── __init__.py
-│   │   ├── distance_sensor_interface.py # ABC for range sensors
-│   │   ├── simulated_sensor.py          # Simulated sensor for LEFT, CENTER, RIGHT
-│   │   ├── sensor_manager.py            # SensorManager coordinating 3 spatial distance sensors
-│   │   └── ultrasonic_sensor.py         # Future HC-SR04 GPIO driver shell
-│   │
-│   ├── fusion/                # Multi-sensor fusion engine
-│   │   ├── __init__.py
-│   │   └── sensor_fusion.py          # Zone-based vision + distance sensor fusion
-│   │
-│   ├── decision/              # Risk evaluation and navigation logic
-│   │   ├── __init__.py
-│   │   ├── risk_analyzer.py          # Configurable distance-based risk assessment
-│   │   └── direction_analyzer.py     # Spatial zone path recommendation
-│   │
-│   ├── alerts/                # Multi-modal feedback layer
-│   │   ├── __init__.py
-│   │   ├── alert_manager.py          # Central alert dispatcher with debouncing
-235: │   │   ├── vibration_interface.py    # ABC for haptic motors
-│   │   ├── simulated_vibration.py    # Console vibration simulator (LEFT / BOTH / RIGHT)
-│   │   ├── raspberry_pi_vibration.py # Future Pi GPIO motor driver shell
-│   │   ├── voice_alert.py            # Thread-safe pyttsx3 Text-to-Speech manager
-│   │   └── audio_manager.py          # Sound cue & tone manager
-│   │
-│   ├── core/                  # Shared data models and enums
-│   │   ├── __init__.py
-│   │   ├── models.py                 # Dataclasses (FusedObstacle, SensorReading, BoundingBox)
-│   │   └── enums.py                  # System Enums (RiskLevel, SensorStatus, ObstacleZone)
-│   │
-│   └── utils/                 # Utility helpers
-│       ├── __init__.py
-│       ├── logger.py                 # System logging setup
-│       └── helpers.py                # YAML configuration loader & spatial helpers
-│
-└── tests/                     # Unit test suite
-    ├── __init__.py
-    ├── test_alerts.py                # Phase 5 alert system & TTS worker tests
-    ├── test_detection.py             # Detector and camera interface tests
-    ├── test_real_time_detection.py   # Phase 2 YOLO visualizer tests
-    ├── test_sensor_fusion.py         # Sensor fusion engine tests
-    ├── test_simulated_sensors.py     # Phase 3 simulated sensor & manager tests
-    ├── test_phase4_fusion.py         # Phase 4 sensor fusion & risk tests
-    ├── test_phase6_dashboard_logging.py # Phase 6 dashboard & CSV event logger tests
-    ├── test_risk_analysis.py         # Risk classification tests
-    └── test_direction.py             # Directional guidance tests
+│   ├── main.py                   # CLI entry point and execution modes
+│   ├── pipeline.py               # NavigationPipeline shared by all modes
+│   ├── camera/                   # Webcam, video/image file input, camera factory, Pi camera placeholder
+│   ├── detection/                # YOLO detector and IoU object tracker
+│   ├── sensors/                  # Simulated + ultrasonic sensors, scenario engine, vision distance estimator
+│   ├── fusion/                   # Vision + distance sensor fusion
+│   ├── decision/                 # Risk analyzer and direction analyzer
+│   ├── alerts/                   # Alert manager, voice (TTS), simulated/Pi vibration
+│   ├── dashboard/                # Terminal dashboard, video overlay, simulated shoe panel
+│   ├── event_logging/            # CSV event log and system log
+│   ├── core/                     # Shared data models and enums
+│   └── utils/                    # Config loading, logging setup, visual helpers
+└── tests/                        # Unit tests (pytest)
 ```
+
+---
+
+## Limitations
+
+* **Distances are simulated.** Camera-linked distances are estimates from box size and typical object
+  sizes; accuracy depends on the webcam's field of view. Wide poses (arms outstretched) read closer
+  than reality — the error is on the safe side.
+* **Only COCO classes are recognised.** Stairs, doors, and potholes are not; on the real shoe the
+  ultrasonic sensors cover these, which the demo shows with manual and scripted sensor distances.
+* **CPU only.** About 10 frames per second on a laptop; a Raspberry Pi would need a smaller input size
+  or an accelerator.
+* **The demo video** is a zoomed still photo, labelled as a simulation on every frame; a real recording
+  from the demo room is more convincing (see `demo/README.md`).
+
+## Development Phases
+
+| Phase | Description | Status |
+|---|---|---|
+| 1 | Base architecture and abstractions | ✅ |
+| 2 | Real-time webcam + YOLOv8 detection | ✅ |
+| 3 | Simulated LEFT / CENTER / RIGHT distance sensors | ✅ |
+| 4 | Sensor fusion and risk analysis | ✅ |
+| 5 | Vibration and voice alerts | ✅ |
+| 6 | Dashboard and event logging | ✅ |
+| 7 | Software-only demonstration: scenario engine, camera-linked sensors, video input, direction guidance, simulated shoe panel, tracking and flicker control | ✅ |
+| 8 | Raspberry Pi hardware (HC-SR04 sensors, vibration motors, Pi camera) | ⏳ Future — interfaces and GPIO pin map ready |

@@ -1,3 +1,5 @@
+# Verified on Windows 11, Python 3.11.9 with: opencv-python 5.0.0.93, ultralytics 8.4.163,
+# torch 2.14.0 (CPU), numpy 2.4.6, pyttsx3 2.99, PyYAML 6.0.3, pytest 9.1.1
 opencv-python>=4.8.0
 ultralytics>=8.0.0
 torch>=2.0.0
