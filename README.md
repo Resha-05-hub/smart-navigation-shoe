@@ -124,7 +124,7 @@ Click the video window first so it receives key presses.
    The CENTER cone turns grey (FAULT) and the voice says *"Caution. Center sensor not responding."* —
    the system never claims the path is clear when it cannot know.
 5. **Evidence (1 min).** Open `logs\detection_events.csv`: every spoken alert with time, object, zone,
-   distance, risk, vibration, and direction. Run the test suite (below) to show 179 passing tests.
+   distance, risk, vibration, and direction. Run the test suite (below) to show 180 passing tests.
 
 **If the webcam fails at the venue**, the demo video plays automatically (`camera.fallback_source`), or run
 `--source demo\approach_demo.mp4`. `--mode scenario` needs no camera at all.
@@ -188,7 +188,7 @@ The per-frame wiring is in `src/pipeline.py` (`NavigationPipeline`), shared by e
 venvv\Scripts\python.exe -m pytest
 ```
 
-179 tests cover detection parsing, tracking, simulated sensors and scenarios, distance estimation, fusion,
+180 tests cover detection parsing, tracking, simulated sensors and scenarios, distance estimation, fusion,
 risk hysteresis, sensor faults, direction guidance, alert debouncing, dashboard rendering, event logging,
 video input, and configuration consistency. Tests use mocks and generated frames; no webcam is needed.
 
