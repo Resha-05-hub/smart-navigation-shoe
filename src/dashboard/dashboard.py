@@ -16,6 +16,10 @@ class Dashboard:
         self.enabled = dash_cfg.get("enabled", True)
         self.refresh_interval = dash_cfg.get("refresh_interval", 0.2)
 
+        # Enable ANSI escape handling in the Windows console so the CLI can redraw in place
+        if os.name == "nt":
+            os.system("")
+
     def render_cli(self, snapshot: DashboardSnapshot) -> str:
         """Renders formatted ASCII status dashboard text string matching Phase 6 layout."""
         lines = []
@@ -70,10 +74,11 @@ class Dashboard:
         return "\n".join(lines)
 
     def display_cli(self, snapshot: DashboardSnapshot, clear_screen: bool = False) -> None:
-        """Displays dashboard in console terminal."""
+        """Displays dashboard in console terminal, redrawing in place when clear_screen is set."""
         if clear_screen:
-            os.system("cls" if os.name == "nt" else "clear")
-        print(self.render_cli(snapshot))
+            # Cursor home + clear to end of screen: no subprocess and no flicker, unlike cls/clear
+            print("\033[H\033[J", end="")
+        print(self.render_cli(snapshot), flush=True)
 
     def render_video_overlay(self, frame: np.ndarray, snapshot: DashboardSnapshot) -> np.ndarray:
         """Renders dashboard status panel overlay onto an OpenCV camera frame."""

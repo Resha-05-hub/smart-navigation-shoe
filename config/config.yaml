@@ -24,6 +24,8 @@ detection:
     show_confidence: true
     show_box: true
     color_bgr: [0, 255, 0]
+  # Only these COCO class names are detected (empty list = all 80 classes).
+  # Stairs/doors are not COCO classes; low obstacles are caught by the distance sensors instead.
   target_classes:
     - person
     - bicycle
@@ -36,7 +38,6 @@ detection:
     - couch
     - potted plant
     - dining table
-    - stairs
 
 sensors:
   distance_sensor:

@@ -58,6 +58,35 @@ class TestPhase2Detection(unittest.TestCase):
         self.assertEqual(det.estimated_distance_m, 0.0)  # No fake distance
         self.assertEqual(det.bbox.xmin, 50.0)
 
+    def test_target_classes_resolved_to_model_ids(self):
+        """Verify configured class names become YOLO class IDs, ignoring names the model lacks."""
+        detector = YoloDetector(target_classes=["person", "chair", "stairs"])
+        detector._model = MagicMock(names={0: "person", 27: "tie", 56: "chair"})
+
+        with self.assertLogs("yolo_detector", level="WARNING") as logs:
+            detector._resolve_target_class_ids()
+
+        self.assertEqual(detector._target_class_ids, [0, 56])
+        self.assertIn("stairs", logs.output[0])
+
+    def test_target_classes_passed_to_model_call(self):
+        """Verify detect() restricts YOLO inference to the resolved class IDs."""
+        detector = YoloDetector(target_classes=["person"])
+        detector._model = MagicMock(names={0: "person", 27: "tie"})
+        detector._model.return_value = []
+        detector._resolve_target_class_ids()
+        detector._is_loaded = True
+
+        detector.detect(np.zeros((480, 640, 3), dtype=np.uint8))
+        self.assertEqual(detector._model.call_args.kwargs["classes"], [0])
+
+    def test_no_target_classes_detects_everything(self):
+        """Verify an empty target list leaves YOLO unfiltered."""
+        detector = YoloDetector(target_classes=[])
+        detector._model = MagicMock(names={0: "person"})
+        detector._resolve_target_class_ids()
+        self.assertIsNone(detector._target_class_ids)
+
 
 if __name__ == "__main__":
     unittest.main()

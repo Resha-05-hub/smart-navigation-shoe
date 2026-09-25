@@ -8,6 +8,18 @@ from ..utils.logger import get_logger
 
 logger = get_logger("risk_analyzer")
 
+# Severity ranking shared by the risk analyzer and alert manager (legacy levels map onto the Phase 4 scale)
+RISK_PRIORITY: Dict[RiskLevel, int] = {
+    RiskLevel.SAFE: 0,
+    RiskLevel.LOW: 1,
+    RiskLevel.CAUTION: 1,
+    RiskLevel.MEDIUM: 2,
+    RiskLevel.WARNING: 2,
+    RiskLevel.HIGH: 3,
+    RiskLevel.DANGER: 4,
+    RiskLevel.CRITICAL: 4,
+}
+
 
 class RiskAnalyzer:
     """Evaluates individual obstacle risks and overall environment safety level."""
@@ -100,22 +112,11 @@ class RiskAnalyzer:
         highest_risk = RiskLevel.SAFE
         critical_items: List[FusedObstacle] = []
 
-        risk_priority = {
-            RiskLevel.SAFE: 0,
-            RiskLevel.LOW: 1,
-            RiskLevel.CAUTION: 1,
-            RiskLevel.MEDIUM: 2,
-            RiskLevel.WARNING: 2,
-            RiskLevel.HIGH: 3,
-            RiskLevel.DANGER: 4,
-            RiskLevel.CRITICAL: 4,
-        }
-
         for obs in obstacles:
             risk = self.classify_obstacle_risk(obs)
             obs.risk_level = risk
 
-            if risk_priority.get(risk, 0) > risk_priority.get(highest_risk, 0):
+            if RISK_PRIORITY.get(risk, 0) > RISK_PRIORITY.get(highest_risk, 0):
                 highest_risk = risk
 
             if risk in (RiskLevel.DANGER, RiskLevel.WARNING, RiskLevel.HIGH, RiskLevel.CRITICAL):

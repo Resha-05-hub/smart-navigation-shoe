@@ -74,14 +74,12 @@ class SmartNavigationShoeApp:
             confidence_threshold=det_cfg.get("confidence_threshold", 0.5),
             iou_threshold=det_cfg.get("iou_threshold", 0.45),
             device=det_cfg.get("device", "cpu"),
+            target_classes=det_cfg.get("target_classes"),
         )
         self.detector.load_model()
 
         # 4. Initialize Sensor Fusion Engine
-        sensor_cfg = self.config.get("sensors", {}).get("distance_sensor", {})
-        self.fusion_engine = SensorFusionEngine(
-            default_range_m=sensor_cfg.get("simulated_default_m", 2.5)
-        )
+        self.fusion_engine = SensorFusionEngine(config=self.config)
 
         # 5. Initialize Decision Engine (Risk & Direction Analyzers)
         self.risk_analyzer = RiskAnalyzer(config=self.config)
@@ -241,6 +239,7 @@ def run_realtime_fusion(config_path: str = "config/config.yaml") -> None:
         confidence_threshold=det_cfg.get("confidence_threshold", 0.5),
         iou_threshold=det_cfg.get("iou_threshold", 0.45),
         device=det_cfg.get("device", "cpu"),
+        target_classes=det_cfg.get("target_classes"),
     )
 
     print(f"\n[INFO] Loading YOLO model weights from '{model_path}'...")
@@ -249,9 +248,7 @@ def run_realtime_fusion(config_path: str = "config/config.yaml") -> None:
         camera.release()
         return
 
-    fusion_engine = SensorFusionEngine(
-        default_range_m=config.get("sensors", {}).get("distance_sensor", {}).get("simulated_default_m", 2.5)
-    )
+    fusion_engine = SensorFusionEngine(config=config)
     risk_analyzer = RiskAnalyzer(config=config)
 
     vibration = SimulatedVibration(enabled=True)
@@ -370,6 +367,7 @@ def run_realtime_detection(config_path: str = "config/config.yaml") -> None:
         confidence_threshold=det_cfg.get("confidence_threshold", 0.5),
         iou_threshold=det_cfg.get("iou_threshold", 0.45),
         device=det_cfg.get("device", "cpu"),
+        target_classes=det_cfg.get("target_classes"),
     )
 
     print(f"[INFO] Loading YOLO model weights from '{model_path}'...")
@@ -457,6 +455,7 @@ def run_dashboard_mode(config_path: str = "config/config.yaml") -> None:
         confidence_threshold=det_cfg.get("confidence_threshold", 0.5),
         iou_threshold=det_cfg.get("iou_threshold", 0.45),
         device=det_cfg.get("device", "cpu"),
+        target_classes=det_cfg.get("target_classes"),
     )
 
     print(f"[INFO] Loading YOLO model weights from '{model_path}'...")
@@ -468,9 +467,7 @@ def run_dashboard_mode(config_path: str = "config/config.yaml") -> None:
 
     event_logger.log_system_message("YOLO model loaded")
 
-    fusion_engine = SensorFusionEngine(
-        default_range_m=config.get("sensors", {}).get("distance_sensor", {}).get("simulated_default_m", 2.5)
-    )
+    fusion_engine = SensorFusionEngine(config=config)
     risk_analyzer = RiskAnalyzer(config=config)
 
     vibration = SimulatedVibration(enabled=True)
@@ -499,34 +496,36 @@ def run_dashboard_mode(config_path: str = "config/config.yaml") -> None:
             fused_obstacles = fusion_engine.fuse(detection_result.detections, sensor_readings)
             risk_assessment = risk_analyzer.evaluate(fused_obstacles)
 
-            vib_action, voice_msg = alert_manager.evaluate_and_trigger(risk_assessment, fused_obstacles)
+            vib_action, _alert_status = alert_manager.evaluate_and_trigger(risk_assessment, fused_obstacles)
             vib_text = vib_action.replace("VIBRATION: ", "")
+            alert_triggered = alert_manager.last_alert_triggered
 
-            # Log event (debounced)
+            # Log event (debounced); only messages actually spoken are recorded as voice output
             event_logger.log_event(
                 fused_obstacles=fused_obstacles,
                 overall_risk=risk_assessment.overall_risk_level,
                 vibration_action=vib_text,
-                voice_message=voice_msg,
+                voice_message=alert_manager.last_triggered_text if alert_triggered else "",
+                alert_triggered=alert_triggered,
             )
 
-            # Build Dashboard Snapshot
+            # Build Dashboard Snapshot (voice line shows the last message the user heard)
             snapshot = DashboardSnapshot.from_pipeline_results(
                 fused_obstacles=fused_obstacles,
                 sensor_readings=sensor_readings,
                 overall_risk=risk_assessment.overall_risk_level,
                 vibration_action=vib_text,
-                voice_message=voice_msg,
+                voice_message=alert_manager.last_triggered_text or "Path clear.",
                 recent_events=event_logger.recent_events,
                 camera_status="CONNECTED" if camera.is_connected else "DISCONNECTED",
-                yolo_status="ACTIVE" if detector.is_loaded else "INACTIVE",
+                yolo_status="ACTIVE" if detector.is_loaded() else "INACTIVE",
                 sensors_status="ACTIVE (SIMULATED)",
             )
 
-            # Print ASCII terminal dashboard periodically
+            # Redraw ASCII terminal dashboard in place periodically
             now = time.time()
             if now - last_cli_update_time >= dashboard.refresh_interval:
-                dashboard.display_cli(snapshot, clear_screen=False)
+                dashboard.display_cli(snapshot, clear_screen=True)
                 last_cli_update_time = now
 
             # Annotate video frame with bounding boxes and overlay dashboard banner

@@ -277,6 +277,55 @@ def test_11_detection_event_written_correctly(temp_log_dir):
     assert data_row[7] == "Warning. Obstacle ahead. Slow down."
 
 
+def test_11b_alert_status_column_records_spoken_vs_suppressed(temp_log_dir):
+    """Test 11b: voice_message holds only spoken text; alert_status says whether it was spoken."""
+    event_path, sys_path = temp_log_dir
+    logger = EventLogger(event_log_path=str(event_path), system_log_path=str(sys_path))
+
+    obs = FusedObstacle("1", "person", 0.87, None, 0.8, ObstacleZone.CENTER, RiskLevel.WARNING)
+    logger.log_event([obs], RiskLevel.WARNING, "BOTH - MEDIUM PULSE",
+                     "Warning. Obstacle ahead. Slow down.", force=True, alert_triggered=True)
+    logger.log_event([obs], RiskLevel.WARNING, "BOTH - MEDIUM PULSE", "", force=True, alert_triggered=False)
+
+    with open(event_path, mode="r", encoding="utf-8") as f:
+        rows = list(csv.DictReader(f))
+
+    assert rows[0]["voice_message"] == "Warning. Obstacle ahead. Slow down."
+    assert rows[0]["alert_status"] == "TRIGGERED"
+    assert rows[1]["voice_message"] == ""
+    assert rows[1]["alert_status"] == "SUPPRESSED"
+
+    content = sys_path.read_text(encoding="utf-8")
+    assert "WARNING alert triggered" in content
+
+
+def test_11c_old_csv_layout_is_preserved_not_appended(temp_log_dir):
+    """Test 11c: a CSV with an outdated header is renamed aside and a fresh file started."""
+    event_path, sys_path = temp_log_dir
+    old_header = "timestamp,object_name,confidence,zone,distance_cm,risk_level,vibration_action,voice_message\n"
+    event_path.write_text(old_header + "2026-09-24 10:55:38,person,0.87,CENTER,80,WARNING,BOTH,Warning.\n",
+                          encoding="utf-8")
+
+    EventLogger(event_log_path=str(event_path), system_log_path=str(sys_path))
+
+    with open(event_path, mode="r", encoding="utf-8") as f:
+        assert next(csv.reader(f)) == CSV_HEADERS
+
+    legacy_files = list(event_path.parent.glob(f"{event_path.stem}.legacy_*{event_path.suffix}"))
+    assert len(legacy_files) == 1
+    assert "10:55:38" in legacy_files[0].read_text(encoding="utf-8")
+
+
+def test_11d_sensor_only_obstacle_confidence_display():
+    """Test 11d: sensor-only obstacles show 'sensor' instead of a 0% confidence."""
+    obs = FusedObstacle("s", "obstacle", 0.0, None, 0.3, ObstacleZone.CENTER, RiskLevel.DANGER)
+    snapshot = DashboardSnapshot.from_pipeline_results(
+        fused_obstacles=[obs], sensor_readings=[], overall_risk=RiskLevel.DANGER
+    )
+    assert snapshot.detections[0].confidence_pct_str == "sensor"
+    assert "0%" not in Dashboard().render_cli(snapshot)
+
+
 def test_12_duplicate_continuous_events_not_logged(temp_log_dir):
     """Test 12: Duplicate continuous events are not logged unnecessarily."""
     event_path, sys_path = temp_log_dir

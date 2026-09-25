@@ -1,6 +1,6 @@
 """Sensor fusion logic combining vision object detection and distance sensor measurements."""
 
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 import uuid
 
 from ..core.models import DetectionItem, SensorReading, FusedObstacle
@@ -17,11 +17,29 @@ class SensorFusionEngine:
     - YOLO provides object identification and image bounding box spatial zone (LEFT, CENTER, RIGHT).
     - Distance sensors supply distance measurements for each spatial zone.
     - Sensor fusion maps visual object detections to their corresponding zone's distance reading.
+    - Distance sensors that report a close obstacle in a zone where the camera sees nothing
+      (e.g. low ground obstacles below the camera's view) produce a sensor-only obstacle.
     - Note: YOLO does NOT compute distance values.
     """
 
-    def __init__(self, default_range_m: float = 2.5) -> None:
+    SENSOR_ONLY_LABEL = "obstacle"
+
+    def __init__(
+        self,
+        default_range_m: float = 2.5,
+        sensor_only_max_m: float = 2.0,
+        config: Optional[Dict[str, Any]] = None,
+    ) -> None:
         self.default_range_m = default_range_m
+        self.sensor_only_max_m = sensor_only_max_m
+
+        if config:
+            sensor_cfg = config.get("sensors", {}).get("distance_sensor", {})
+            self.default_range_m = sensor_cfg.get("simulated_default_m", default_range_m)
+            # Sensor-only obstacles are reported out to the CAUTION boundary
+            thresh_cm = config.get("risk_analysis", {}).get("thresholds_cm", {})
+            if "caution_cm" in thresh_cm:
+                self.sensor_only_max_m = thresh_cm["caution_cm"] / 100.0
 
     def fuse(
         self,
@@ -39,20 +57,11 @@ class SensorFusionEngine:
         """
         fused_obstacles: List[FusedObstacle] = []
 
-        if not detections:
-            return fused_obstacles
-
         # Build map of spatial position -> SensorReading
         zone_sensor_map: Dict[ObstacleZone, SensorReading] = {}
         for r in sensor_readings:
             if hasattr(r, "position") and r.position:
                 zone_sensor_map[r.position] = r
-
-        # Primary fall-back distance if zone reading is missing/invalid
-        primary_fallback_m = self.default_range_m
-        valid_readings = [r for r in sensor_readings if r.is_valid and r.distance_m > 0]
-        if valid_readings:
-            primary_fallback_m = valid_readings[0].distance_m
 
         for idx, item in enumerate(detections):
             target_zone = item.zone
@@ -69,10 +78,11 @@ class SensorFusionEngine:
             # Retrieve corresponding distance sensor reading for object's spatial zone
             sensor_reading = zone_sensor_map.get(target_zone)
 
+            # A missing/invalid zone sensor must not borrow another zone's distance
             if sensor_reading and sensor_reading.is_valid and sensor_reading.distance_m > 0:
                 distance_m = sensor_reading.distance_m
             else:
-                distance_m = primary_fallback_m
+                distance_m = self.default_range_m
 
             fused_obstacle = FusedObstacle(
                 object_id=f"fused_{idx}_{uuid.uuid4().hex[:6]}",
@@ -84,5 +94,24 @@ class SensorFusionEngine:
                 risk_level=RiskLevel.SAFE,  # Will be assigned by RiskAnalyzer
             )
             fused_obstacles.append(fused_obstacle)
+
+        # Close sensor readings in zones with no visual detection become unidentified obstacles
+        visual_zones = {obs.zone for obs in fused_obstacles}
+        for zone in (ObstacleZone.LEFT, ObstacleZone.CENTER, ObstacleZone.RIGHT):
+            reading = zone_sensor_map.get(zone)
+            if zone in visual_zones or reading is None or not reading.is_valid:
+                continue
+            if 0 < reading.distance_m <= self.sensor_only_max_m:
+                fused_obstacles.append(
+                    FusedObstacle(
+                        object_id=f"sensor_{zone.value.lower()}_{uuid.uuid4().hex[:6]}",
+                        label=self.SENSOR_ONLY_LABEL,
+                        confidence=0.0,  # Not visually identified
+                        bbox=None,
+                        distance_m=round(reading.distance_m, 2),
+                        zone=zone,
+                        risk_level=RiskLevel.SAFE,  # Will be assigned by RiskAnalyzer
+                    )
+                )
 
         return fused_obstacles

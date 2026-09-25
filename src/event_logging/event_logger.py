@@ -22,6 +22,7 @@ CSV_HEADERS = [
     "risk_level",
     "vibration_action",
     "voice_message",
+    "alert_status",
 ]
 
 
@@ -82,6 +83,17 @@ class EventLogger:
         self.event_log_path.parent.mkdir(parents=True, exist_ok=True)
         self.system_log_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # Keep a CSV written with an older column layout instead of appending mismatched rows
+        if self.event_log_path.exists() and self.event_log_path.stat().st_size > 0:
+            with open(self.event_log_path, mode="r", newline="", encoding="utf-8") as f:
+                existing_header = next(csv.reader(f), [])
+            if existing_header != CSV_HEADERS:
+                stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                legacy_path = self.event_log_path.with_name(
+                    f"{self.event_log_path.stem}.legacy_{stamp}{self.event_log_path.suffix}"
+                )
+                self.event_log_path.rename(legacy_path)
+
         if not self.event_log_path.exists() or self.event_log_path.stat().st_size == 0:
             with open(self.event_log_path, mode="w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
@@ -117,8 +129,13 @@ class EventLogger:
         vibration_action: str,
         voice_message: str,
         force: bool = False,
+        alert_triggered: bool = False,
     ) -> bool:
         """Logs detection events to CSV and recent_events buffer if not duplicate continuous frame state.
+
+        Args:
+            voice_message: Message actually spoken this frame (empty when the voice alert was suppressed).
+            alert_triggered: True if the alert manager spoke a voice alert this frame.
 
         Returns True if at least one new event row was written, False if debounced/skipped.
         """
@@ -126,7 +143,8 @@ class EventLogger:
             return False
 
         risk_str = overall_risk.value if isinstance(overall_risk, RiskLevel) else str(overall_risk)
-        is_alert_triggered = "[ALERT TRIGGERED]" in voice_message
+        is_alert_triggered = alert_triggered
+        alert_status_str = "TRIGGERED" if alert_triggered else "SUPPRESSED"
         now_ts = time.time()
         logged_any = False
 
@@ -150,6 +168,7 @@ class EventLogger:
                         risk_str,
                         vibration_action,
                         voice_message,
+                        alert_status_str,
                     ])
 
                 rec_ev = RecentEvent(
@@ -194,6 +213,7 @@ class EventLogger:
                             obs_risk,
                             vibration_action,
                             voice_message,
+                            alert_status_str,
                         ])
 
                     rec_ev = RecentEvent(

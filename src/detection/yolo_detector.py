@@ -37,13 +37,36 @@ class YoloDetector(DetectorInterface):
         confidence_threshold: float = 0.5,
         iou_threshold: float = 0.45,
         device: str = "cpu",
+        target_classes: Optional[List[str]] = None,
     ) -> None:
         self.model_path = model_path
         self.confidence_threshold = confidence_threshold
         self.iou_threshold = iou_threshold
         self.device = device
+        self.target_classes = list(target_classes) if target_classes else []
+        self._target_class_ids: Optional[List[int]] = None  # None = detect every class
         self._model = None
         self._is_loaded = False
+
+    def _resolve_target_class_ids(self) -> None:
+        """Maps configured class names to the loaded model's class IDs, warning about unknown names."""
+        if not self.target_classes or self._model is None:
+            self._target_class_ids = None
+            return
+
+        names = getattr(self._model, "names", {}) or {}
+        if isinstance(names, list):
+            names = dict(enumerate(names))
+        name_to_id = {str(name): int(cls_id) for cls_id, name in names.items()}
+
+        unknown = [name for name in self.target_classes if name not in name_to_id]
+        if unknown:
+            logger.warning(f"Ignoring target classes not known to the YOLO model: {unknown}")
+
+        self._target_class_ids = [name_to_id[name] for name in self.target_classes if name in name_to_id]
+        if not self._target_class_ids:
+            logger.warning("No configured target classes match the model; detecting all classes.")
+            self._target_class_ids = None
 
     def load_model(self, model_path: Optional[str] = None) -> bool:
         """Loads Ultralytics YOLO model weights. If model file does not exist, Ultralytics downloads it automatically."""
@@ -53,6 +76,7 @@ class YoloDetector(DetectorInterface):
         try:
             from ultralytics import YOLO
             self._model = YOLO(path_to_load)
+            self._resolve_target_class_ids()
             self._is_loaded = True
             logger.info("YOLO model initialized successfully.")
             return True
@@ -85,6 +109,7 @@ class YoloDetector(DetectorInterface):
                 conf=self.confidence_threshold,
                 iou=self.iou_threshold,
                 device=self.device,
+                classes=self._target_class_ids,
                 verbose=False,
             )
 

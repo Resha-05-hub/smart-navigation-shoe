@@ -88,7 +88,10 @@ class FusedObstacle:
 
     def format_display(self) -> str:
         """Formats single fused obstacle summary."""
-        conf_pct = f"{int(self.confidence * 100)}%" if self.confidence <= 1.0 else f"{self.confidence}%"
+        if self.confidence <= 0.0:
+            conf_pct = "N/A (sensor only)"
+        else:
+            conf_pct = f"{int(self.confidence * 100)}%" if self.confidence <= 1.0 else f"{self.confidence}%"
         return (
             "----------------------------------------\n"
             "SENSOR FUSION RESULT\n"

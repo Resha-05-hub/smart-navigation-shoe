@@ -122,13 +122,63 @@ class TestPhase4SensorFusionAndRisk(unittest.TestCase):
         self.assertEqual(fused[0].distance_m, self.fusion.default_range_m)
 
     def test_empty_detection_list(self):
-        """Verify empty detection list returns empty fused obstacle list."""
-        readings = [SensorReading(0.8, position=ObstacleZone.CENTER, is_valid=True)]
+        """Verify empty detection list with clear sensors returns empty fused obstacle list."""
+        readings = [SensorReading(3.0, position=ObstacleZone.CENTER, is_valid=True)]
         fused = self.fusion.fuse([], readings)
         self.assertEqual(len(fused), 0)
 
         assessment = self.risk_analyzer.evaluate(fused)
         self.assertEqual(assessment.overall_risk_level, RiskLevel.SAFE)
+
+    def test_sensor_only_obstacle_when_camera_sees_nothing(self):
+        """Verify a close sensor reading with no visual detection still raises risk."""
+        readings = [
+            SensorReading(3.0, position=ObstacleZone.LEFT, is_valid=True),
+            SensorReading(0.3, position=ObstacleZone.CENTER, is_valid=True),
+            SensorReading(3.0, position=ObstacleZone.RIGHT, is_valid=True),
+        ]
+        fused = self.fusion.fuse([], readings)
+
+        self.assertEqual(len(fused), 1)
+        self.assertEqual(fused[0].label, SensorFusionEngine.SENSOR_ONLY_LABEL)
+        self.assertEqual(fused[0].zone, ObstacleZone.CENTER)
+        self.assertEqual(fused[0].confidence, 0.0)
+        self.assertIsNone(fused[0].bbox)
+        self.assertEqual(self.risk_analyzer.evaluate(fused).overall_risk_level, RiskLevel.DANGER)
+
+    def test_sensor_only_obstacle_not_added_when_zone_has_visual_detection(self):
+        """Verify a zone with a YOLO detection is not duplicated as a sensor-only obstacle."""
+        bbox_c = BoundingBox(xmin=250, ymin=10, xmax=350, ymax=200)
+        item_c = DetectionItem("person", 0.91, bbox_c, ObstacleZone.CENTER)
+        readings = [SensorReading(0.8, position=ObstacleZone.CENTER, is_valid=True)]
+
+        fused = self.fusion.fuse([item_c], readings)
+        self.assertEqual([obs.label for obs in fused], ["person"])
+
+    def test_sensor_only_threshold_from_config(self):
+        """Verify sensor-only obstacles are reported out to the configured CAUTION distance."""
+        fusion = SensorFusionEngine(config={"risk_analysis": {"thresholds_cm": {"caution_cm": 120.0}}})
+        self.assertEqual(fusion.sensor_only_max_m, 1.2)
+
+        near = fusion.fuse([], [SensorReading(1.1, position=ObstacleZone.LEFT, is_valid=True)])
+        far = fusion.fuse([], [SensorReading(1.5, position=ObstacleZone.LEFT, is_valid=True)])
+        self.assertEqual(len(near), 1)
+        self.assertEqual(len(far), 0)
+
+    def test_invalid_zone_sensor_does_not_borrow_other_zone(self):
+        """Verify an invalid CENTER sensor falls back to default range, not the LEFT sensor's distance."""
+        bbox_c = BoundingBox(xmin=250, ymin=10, xmax=350, ymax=200)
+        item_c = DetectionItem("person", 0.9, bbox_c, ObstacleZone.CENTER)
+        readings = [
+            SensorReading(2.5, position=ObstacleZone.LEFT, is_valid=True),
+            SensorReading(-1.0, position=ObstacleZone.CENTER, status=SensorStatus.INVALID, is_valid=False),
+        ]
+        # LEFT at 2.5 m is outside the sensor-only range, so only the person is fused
+        fusion = SensorFusionEngine(default_range_m=3.0)
+        fused = fusion.fuse([item_c], readings)
+
+        self.assertEqual(len(fused), 1)
+        self.assertEqual(fused[0].distance_m, 3.0)
 
     def test_preservation_of_confidence_and_label(self):
         """Verify object label, confidence %, and bbox are preserved exactly through fusion."""

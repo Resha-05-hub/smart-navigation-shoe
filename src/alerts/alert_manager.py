@@ -9,6 +9,7 @@ from .voice_alert import VoiceAlertManager
 from .audio_manager import AudioManager
 from ..core.models import RiskAssessment, DirectionGuidance, FusedObstacle
 from ..core.enums import RiskLevel, AlertPattern, ObstacleZone
+from ..decision.risk_analyzer import RISK_PRIORITY
 from ..utils.logger import get_logger
 
 logger = get_logger("alert_manager")
@@ -47,6 +48,17 @@ class AlertManager:
         self.last_triggered_zone: Optional[ObstacleZone] = None
         self.last_triggered_text: str = ""
         self.last_vibration_text: str = "VIBRATION: OFF"
+        self.last_alert_triggered: bool = False
+
+    @staticmethod
+    def select_primary_obstacle(fused_obstacles: List[FusedObstacle]) -> Optional[FusedObstacle]:
+        """Returns the obstacle that alerts should describe: highest risk first, then closest distance."""
+        if not fused_obstacles:
+            return None
+        return max(
+            fused_obstacles,
+            key=lambda obs: (RISK_PRIORITY.get(obs.risk_level, 0), -obs.distance_m),
+        )
 
     def determine_voice_message(self, risk_level: RiskLevel, zone: ObstacleZone) -> str:
         """Maps overall risk level and primary obstacle zone to prototype voice messages."""
@@ -89,8 +101,9 @@ class AlertManager:
 
         # Determine primary target zone from highest risk obstacle
         primary_zone = ObstacleZone.CENTER
-        if fused_obstacles:
-            primary_zone = fused_obstacles[0].zone
+        primary_obstacle = self.select_primary_obstacle(fused_obstacles)
+        if primary_obstacle is not None:
+            primary_zone = primary_obstacle.zone
 
         # 1. Trigger Vibration Feedback
         if isinstance(self.vibration, SimulatedVibration):
@@ -139,6 +152,8 @@ class AlertManager:
             # Alert suppressed by active cooldown
             alert_triggered = False
             suppress_reason = "Cooldown active"
+
+        self.last_alert_triggered = alert_triggered
 
         if alert_triggered:
             self.voice.speak(voice_message, non_blocking=True)

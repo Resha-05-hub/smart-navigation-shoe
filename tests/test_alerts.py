@@ -112,6 +112,41 @@ class TestPhase5AlertDebouncing(unittest.TestCase):
         self.assertIn("[ALERT SUPPRESSED]", status3)
         self.assertEqual(self.mock_voice.speak.call_count, 0)
 
+    def test_primary_zone_uses_highest_risk_obstacle(self):
+        """Verify alerts describe the most dangerous obstacle, not whichever YOLO listed first."""
+        risk = RiskAssessment(overall_risk_level=RiskLevel.WARNING)
+        chair_right_safe = FusedObstacle(
+            "1", "chair", 0.9, BoundingBox(500, 10, 600, 50), 2.2, ObstacleZone.RIGHT, RiskLevel.SAFE
+        )
+        person_center_warning = FusedObstacle(
+            "2", "person", 0.9, BoundingBox(250, 10, 350, 50), 0.8, ObstacleZone.CENTER, RiskLevel.WARNING
+        )
+
+        vib, status = self.alert_manager.evaluate_and_trigger(risk, [chair_right_safe, person_center_warning])
+        self.assertEqual(vib, "VIBRATION: BOTH - MEDIUM PULSE")
+        self.assertIn("Warning. Obstacle ahead. Slow down.", status)
+
+    def test_primary_obstacle_ties_broken_by_distance(self):
+        """Verify the closer obstacle wins when two share the same risk level."""
+        far_left = FusedObstacle("1", "chair", 0.9, None, 0.9, ObstacleZone.LEFT, RiskLevel.WARNING)
+        near_right = FusedObstacle("2", "dog", 0.9, None, 0.6, ObstacleZone.RIGHT, RiskLevel.WARNING)
+
+        primary = AlertManager.select_primary_obstacle([far_left, near_right])
+        self.assertIs(primary, near_right)
+        self.assertIsNone(AlertManager.select_primary_obstacle([]))
+
+    def test_last_alert_triggered_flag(self):
+        """Verify last_alert_triggered reports whether the latest call actually spoke."""
+        risk = RiskAssessment(overall_risk_level=RiskLevel.WARNING)
+        obs = FusedObstacle("1", "person", 0.91, None, 0.8, ObstacleZone.CENTER, RiskLevel.WARNING)
+
+        self.alert_manager.evaluate_and_trigger(risk, [obs])
+        self.assertTrue(self.alert_manager.last_alert_triggered)
+        self.assertEqual(self.alert_manager.last_triggered_text, "Warning. Obstacle ahead. Slow down.")
+
+        self.alert_manager.evaluate_and_trigger(risk, [obs])
+        self.assertFalse(self.alert_manager.last_alert_triggered)
+
     def test_no_overlapping_tts_calls_worker(self):
         """Verify thread-safe VoiceAlertManager queue processes rapid calls without overlapping loops."""
         voice = VoiceAlertManager(enabled=True)

@@ -20,7 +20,9 @@ class DetectionSummary:
 
     @property
     def confidence_pct_str(self) -> str:
-        """Formatted percentage string, e.g., '87%'."""
+        """Formatted percentage string, e.g., '87%'. Sensor-only obstacles have no visual confidence."""
+        if self.confidence <= 0.0:
+            return "sensor"
         if self.confidence <= 1.0:
             return f"{int(round(self.confidence * 100))}%"
         return f"{int(round(self.confidence))}%"
