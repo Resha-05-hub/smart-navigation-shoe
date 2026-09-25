@@ -6,7 +6,6 @@ from typing import Optional, List, Tuple, Dict, Any
 from .vibration_interface import VibrationInterface
 from .simulated_vibration import SimulatedVibration
 from .voice_alert import VoiceAlertManager
-from .audio_manager import AudioManager
 from ..core.models import RiskAssessment, DirectionGuidance, FusedObstacle
 from ..core.enums import RiskLevel, AlertPattern, ObstacleZone, DirectionCommand
 from ..decision.risk_analyzer import RISK_PRIORITY
@@ -30,14 +29,12 @@ class AlertManager:
         self,
         vibration: VibrationInterface,
         voice: VoiceAlertManager,
-        audio: Optional[AudioManager] = None,
         cooldown_seconds: float = 2.0,
         clear_confirm_seconds: float = 0.0,
         config: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.vibration = vibration
         self.voice = voice
-        self.audio = audio or AudioManager()
         self.cooldown_seconds = cooldown_seconds
         self.clear_confirm_seconds = clear_confirm_seconds  # "Path clear" only after this long without hazards
 

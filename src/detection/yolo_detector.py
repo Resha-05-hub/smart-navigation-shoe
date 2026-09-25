@@ -26,12 +26,6 @@ logger = get_logger("yolo_detector")
 class YoloDetector(DetectorInterface):
     """YOLOv8 implementation of DetectorInterface using Ultralytics library."""
 
-    SUPPORTED_CLASSES: List[str] = [
-        "person", "bicycle", "car", "motorcycle", "bus", "truck",
-        "dog", "cat", "chair", "couch", "potted plant", "dining table",
-        "stairs", "door", "bench", "fire hydrant", "stop sign"
-    ]
-
     def __init__(
         self,
         model_path: str = "models/yolov8n.pt",
