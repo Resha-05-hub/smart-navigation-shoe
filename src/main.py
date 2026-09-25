@@ -33,6 +33,7 @@ from src.core.enums import RiskLevel, ObstacleZone
 from src.dashboard.dashboard_data import DashboardSnapshot
 from src.dashboard.dashboard import Dashboard
 from src.event_logging.event_logger import EventLogger
+from src.utils.visual import FrameRateMeter
 
 
 class SmartNavigationShoeApp:
@@ -511,6 +512,7 @@ def run_dashboard_mode(
         import cv2
 
         last_cli_update_time = 0.0
+        frame_rate = FrameRateMeter()
 
         while True:
             success, frame = camera.read_frame()
@@ -560,6 +562,8 @@ def run_dashboard_mode(
                 sensor_mode=scenario_engine.status_text,
                 controls_hint=CONTROLS_HELP,
                 direction=direction,
+                fps=frame_rate.tick(),
+                inference_ms=detection_result.processing_time_ms,
             )
 
             # Redraw ASCII terminal dashboard in place periodically
@@ -568,9 +572,9 @@ def run_dashboard_mode(
                 dashboard.display_cli(snapshot, clear_screen=True)
                 last_cli_update_time = now
 
-            # Annotate video frame with bounding boxes and overlay dashboard banner
+            # Risk-colored boxes, zone lines, status, and the simulated shoe panel
             annotated_frame = detector.draw_fused_obstacles(frame, fused_obstacles)
-            annotated_frame = dashboard.render_video_overlay(annotated_frame, snapshot)
+            annotated_frame = dashboard.render_frame(annotated_frame, snapshot)
 
             cv2.imshow(window_name, annotated_frame)
 
@@ -600,6 +604,28 @@ def run_dashboard_mode(
         print("[INFO] Camera released and dashboard display window closed cleanly.")
 
 
+def scenario_placeholder_frame(name: str, description: str, width: int = 640, height: int = 480):
+    """Dark stand-in for the camera view in camera-free scenario mode."""
+    import cv2
+    import numpy as np
+
+    frame = np.full((height, width, 3), 32, dtype=np.uint8)
+    lines = [
+        ("NO CAMERA - SENSOR-ONLY SCENARIO", 0.7, (0, 220, 220), 2),
+        (f"Scenario: {name}", 0.55, (230, 230, 230), 1),
+        (description, 0.45, (170, 170, 170), 1),
+        ("Obstacles come from the simulated distance sensors", 0.45, (170, 170, 170), 1),
+        ("Press q or ESC to stop", 0.45, (170, 170, 170), 1),
+    ]
+    y = height // 2 - 70
+    for text, scale, color, thickness in lines:
+        (tw, _), _ = cv2.getTextSize(text, cv2.FONT_HERSHEY_SIMPLEX, scale, thickness)
+        cv2.putText(frame, text, (max(10, (width - tw) // 2), y), cv2.FONT_HERSHEY_SIMPLEX,
+                    scale, color, thickness, cv2.LINE_AA)
+        y += 34
+    return frame
+
+
 def run_scenario_mode(config_path: str = "config/config.yaml", scenario: Optional[str] = None) -> None:
     """Software-only demo without a camera: plays scripted sensor scenarios through the full pipeline.
 
@@ -626,6 +652,16 @@ def run_scenario_mode(config_path: str = "config/config.yaml", scenario: Optiona
     voice = VoiceAlertManager(enabled=True)
     alert_manager = AlertManager(vibration=vibration, voice=voice, config=config)
     dashboard = Dashboard(config=config)
+    frame_rate = FrameRateMeter()
+
+    # Show the simulated shoe panel in a window unless disabled (terminal dashboard always runs)
+    cv2 = None
+    if config.get("dashboard", {}).get("scenario_window", True):
+        try:
+            import cv2
+        except ImportError:
+            cv2 = None
+    window_name = "Smart Navigation Shoe - Sensor Scenario (no camera)"
 
     event_logger.log_system_message(f"Scenario mode started: {', '.join(names)}")
 
@@ -670,15 +706,26 @@ def run_scenario_mode(config_path: str = "config/config.yaml", scenario: Optiona
                     sensor_mode=f"{scenario_engine.status_text} [{index}/{len(names)}]",
                     controls_hint=f"{scenario_engine.scenarios[name].description} | Ctrl+C to stop",
                     direction=direction,
+                    fps=frame_rate.tick(),
                 )
                 dashboard.display_cli(snapshot, clear_screen=True)
-                time.sleep(tick_s)
+
+                if cv2 is None:
+                    time.sleep(tick_s)
+                    continue
+                placeholder = scenario_placeholder_frame(name, scenario_engine.scenarios[name].description)
+                cv2.imshow(window_name, dashboard.render_frame(placeholder, snapshot))
+                key = cv2.waitKey(max(1, int(tick_s * 1000))) & 0xFF
+                if key == ord("q") or key == 27:
+                    raise KeyboardInterrupt
 
         print("\n[SUCCESS] Scenario playback completed.")
     except KeyboardInterrupt:
-        print("\n[INFO] Scenario playback interrupted (Ctrl+C).")
+        print("\n[INFO] Scenario playback interrupted.")
     finally:
         voice.stop()
+        if cv2 is not None:
+            cv2.destroyAllWindows()
         event_logger.log_system_message("Scenario mode closed cleanly")
 
 

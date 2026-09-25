@@ -8,6 +8,7 @@ from .detection_result import DetectionResult
 from ..core.models import DetectionItem, BoundingBox, FusedObstacle
 from ..utils.helpers import determine_zone
 from ..utils.logger import get_logger
+from ..utils.visual import risk_color, label_text_color
 
 try:
     import numpy as np
@@ -228,9 +229,12 @@ class YoloDetector(DetectorInterface):
         self,
         frame: Any,
         fused_obstacles: List[FusedObstacle],
-        box_color: tuple = (0, 255, 0),
+        box_color: Optional[tuple] = None,
     ) -> Any:
-        """Annotates frame with bounding boxes, object names, confidence %, zone, sensor distance cm, and risk level."""
+        """Annotates frame with bounding boxes, object names, confidence %, zone, sensor distance cm, and risk level.
+
+        Boxes are colored by risk level (green SAFE -> red DANGER) unless box_color is given.
+        """
         if frame is None or not hasattr(frame, "copy") or cv2 is None:
             return frame
 
@@ -241,8 +245,11 @@ class YoloDetector(DetectorInterface):
             if bbox is None:
                 continue
 
+            color = box_color or risk_color(obs.risk_level.value)
+            text_color = (0, 0, 0) if box_color else label_text_color(obs.risk_level.value)
+            thickness = 3 if obs.risk_level.value in ("DANGER", "CRITICAL", "WARNING", "HIGH") else 2
             xmin, ymin, xmax, ymax = int(bbox.xmin), int(bbox.ymin), int(bbox.xmax), int(bbox.ymax)
-            cv2.rectangle(annotated_frame, (xmin, ymin), (xmax, ymax), box_color, 2)
+            cv2.rectangle(annotated_frame, (xmin, ymin), (xmax, ymax), color, thickness)
 
             conf_str = f"{int(obs.confidence * 100)}%" if obs.confidence <= 1.0 else f"{obs.confidence}%"
             label_str = f"{obs.label} {conf_str} | {obs.zone.value} | {int(obs.sensor_distance_cm)}cm | {obs.risk_level.value}"
@@ -253,7 +260,7 @@ class YoloDetector(DetectorInterface):
                 annotated_frame,
                 (xmin, text_ymin - text_h - 4),
                 (xmin + text_w + 6, text_ymin + baseline - 2),
-                box_color,
+                color,
                 -1,
             )
             cv2.putText(
@@ -262,7 +269,7 @@ class YoloDetector(DetectorInterface):
                 (xmin + 3, text_ymin - 2),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.45,
-                (0, 0, 0),
+                text_color,
                 1,
                 cv2.LINE_AA,
             )

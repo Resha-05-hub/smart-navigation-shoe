@@ -76,6 +76,8 @@ class DashboardSnapshot:
     timestamp: datetime = field(default_factory=datetime.now)
     sensor_mode: str = "SIMULATED"  # e.g. "MANUAL" or "SCENARIO approaching_obstacle 3.2s"
     controls_hint: str = ""
+    fps: float = 0.0           # Processing loop frames per second
+    inference_ms: float = 0.0  # YOLO time for the current frame
 
     @classmethod
     def from_pipeline_results(
@@ -92,6 +94,8 @@ class DashboardSnapshot:
         sensor_mode: str = "SIMULATED",
         controls_hint: str = "",
         direction: Optional[DirectionGuidance] = None,
+        fps: float = 0.0,
+        inference_ms: float = 0.0,
     ) -> "DashboardSnapshot":
         """Factory method to construct snapshot from raw pipeline outputs."""
         risk_str = overall_risk.value if isinstance(overall_risk, RiskLevel) else str(overall_risk)
@@ -158,4 +162,6 @@ class DashboardSnapshot:
             timestamp=datetime.now(),
             sensor_mode=sensor_mode,
             controls_hint=controls_hint,
+            fps=fps,
+            inference_ms=inference_ms,
         )

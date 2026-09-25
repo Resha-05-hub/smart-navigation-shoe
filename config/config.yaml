@@ -153,6 +153,9 @@ alerts:
 dashboard:
   enabled: true
   refresh_interval: 0.2
+  show_side_panel: true   # Simulated shoe panel (sensor cones, motors, guidance) beside the video
+  show_zone_lines: true   # LEFT | CENTER | RIGHT dividers on the video
+  scenario_window: true   # Show the panel in a window during --mode scenario
 
 logging:
   enabled: true
