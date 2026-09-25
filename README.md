@@ -158,7 +158,7 @@ Camera / video file ──► YOLOv8 detection ──► IoU object tracker
 
 | Stage | Behaviour |
 |---|---|
-| **Detection** (`src/detection/yolo_detector.py`) | YOLOv8n on CPU (~80 ms/frame after warm-up), filtered to `detection.target_classes`, zone from the box centre |
+| **Detection** (`src/detection/yolo_detector.py`) | YOLOv8n on CPU (~145 ms/frame after warm-up; see *Limitations*), filtered to `detection.target_classes`, zone from the box centre |
 | **Tracking** (`src/detection/object_tracker.py`) | Class-aware IoU matching; objects confirmed after 2 sightings, kept through 3 missed frames, boxes smoothed |
 | **Simulated sensors** (`src/sensors/scenario_engine.py`) | *Camera-linked* (default): each zone reads the nearest tracked object's distance, estimated as `real_size × focal_px ÷ box_px` (`vision_distance_estimator.py`). *Manual*: keyboard. *Scenario*: timed keyframes, including sensor faults. ±1 cm noise mimics real ultrasonic readings |
 | **Fusion** (`src/fusion/sensor_fusion.py`) | Each detection takes its zone's distance; a close reading in a zone with no detection becomes an unidentified `obstacle` |
@@ -236,7 +236,9 @@ smart-navigation-shoe/
   than reality — the error is on the safe side.
 * **Only COCO classes are recognised.** Stairs, doors, and potholes are not; on the real shoe the
   ultrasonic sensors cover these, which the demo shows with manual and scripted sensor distances.
-* **CPU only.** About 10 frames per second on a laptop; a Raspberry Pi would need a smaller input size
+* **CPU only.** Measured **6.5 frames per second** end to end (YOLO ~145 ms of each ~155 ms frame) on an
+  AMD Ryzen 5 5500U laptop running on battery, dashboard mode, 640×480; plugged in may be faster.
+  A Raspberry Pi would need a smaller input size
   or an accelerator.
 * **The demo video** is a zoomed still photo, labelled as a simulation on every frame; a real recording
   from the demo room is more convincing (see `demo/README.md`).
