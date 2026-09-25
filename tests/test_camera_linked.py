@@ -192,5 +192,48 @@ class TestCameraLinkedEngine(unittest.TestCase):
         self.assertEqual(observed[-1], RiskLevel.DANGER)
 
 
+class TestConfiguredObjectSizes(unittest.TestCase):
+    """bottle, laptop, and cell phone use their configured sizes, not the 1.0 m x 0.5 m default."""
+
+    CLASSES = ("bottle", "laptop", "cell phone")
+
+    def setUp(self):
+        from src.utils.helpers import load_config
+        self.config = load_config()
+        self.configured = self.config["sensors"]["simulation"]["camera_linked"]["object_sizes_m"]
+        self.estimator = VisionDistanceEstimator(config=self.config)
+
+    def box_at(self, label: str, size_m, distance_m: float) -> DetectionItem:
+        """Fully visible box of a real (height, width) object at distance_m, 60 deg FOV camera."""
+        height_px = size_m[0] * FOCAL_60 / distance_m
+        width_px = size_m[1] * FOCAL_60 / distance_m
+        return DetectionItem(
+            label, 0.9,
+            BoundingBox(320 - width_px / 2, 240 - height_px / 2, 320 + width_px / 2, 240 + height_px / 2),
+            ObstacleZone.CENTER,
+        )
+
+    def test_sizes_loaded_from_config(self):
+        for label in self.CLASSES:
+            self.assertIn(label, self.configured)
+            self.assertEqual(self.estimator.object_sizes_m[label], tuple(self.configured[label]))
+            self.assertNotEqual(self.estimator.object_sizes_m[label], self.estimator.default_size_m)
+
+    def test_estimate_uses_configured_size(self):
+        for label in self.CLASSES:
+            size = self.configured[label]
+            for true_m in (0.5, 1.0, 2.0):
+                estimate = self.estimator.estimate_distance_m(self.box_at(label, size, true_m), FRAME_W, FRAME_H)
+                self.assertAlmostEqual(estimate, true_m, places=2, msg=f"{label} at {true_m} m")
+
+    def test_default_size_would_misjudge_small_objects(self):
+        """Without the configured sizes these objects read far away (e.g. a phone at 0.5 m as ~3.3 m)."""
+        fallback = VisionDistanceEstimator(horizontal_fov_deg=60.0)
+        for label in ("bottle", "cell phone"):
+            det = self.box_at(label, self.configured[label], 0.5)
+            self.assertGreater(fallback.estimate_distance_m(det, FRAME_W, FRAME_H), 1.9)
+            self.assertAlmostEqual(self.estimator.estimate_distance_m(det, FRAME_W, FRAME_H), 0.5, places=2)
+
+
 if __name__ == "__main__":
     unittest.main()
