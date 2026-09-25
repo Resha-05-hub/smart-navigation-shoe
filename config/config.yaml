@@ -1,0 +1,103 @@
+# Smart Navigation Shoe Configuration
+
+system:
+  mode: "fusion"  # Options: "fusion", "alerts", "detection", "sensors", "simulation", "raspberry_pi"
+  environment: "windows_laptop"
+
+camera:
+  type: "webcam"       # Options: "webcam", "raspberry_pi"
+  device_id: 0
+  width: 640
+  height: 480
+  fps: 30
+  frame_skip: 0
+  simulation_fallback: false
+
+detection:
+  model_name: "yolov8n.pt"
+  model_path: "models/yolov8n.pt"
+  confidence_threshold: 0.5
+  iou_threshold: 0.45
+  device: "cpu"        # Options: "cpu", "cuda"
+  display:
+    window_name: "Smart Navigation Shoe - Phase 5 Sensor Fusion & Alerts"
+    show_confidence: true
+    show_box: true
+    color_bgr: [0, 255, 0]
+  target_classes:
+    - person
+    - bicycle
+    - car
+    - motorcycle
+    - bus
+    - truck
+    - dog
+    - chair
+    - couch
+    - potted plant
+    - dining table
+    - stairs
+
+sensors:
+  distance_sensor:
+    type: "simulated"  # Options: "simulated", "ultrasonic"
+    unit: "cm"         # Display unit: "cm" or "m"
+    min_distance_m: 0.2
+    max_distance_m: 4.0
+    simulated_default_m: 2.5
+    simulated_positions:
+      left_cm: 150.0   # 150 cm (1.5 m) -> CAUTION
+      center_cm: 80.0  # 80 cm (0.8 m)  -> WARNING
+      right_cm: 220.0  # 220 cm (2.2 m) -> SAFE
+    update_interval_sec: 0.1
+    gpio_trigger_pins:
+      left: 23
+      center: 17
+      right: 22
+    gpio_echo_pins:
+      left: 24
+      center: 27
+      right: 10
+
+risk_analysis:
+  thresholds_cm:
+    danger_cm: 50.0      # < 50 cm = DANGER
+    warning_cm: 100.0    # 50 - 100 cm = WARNING
+    caution_cm: 200.0    # 100 - 200 cm = CAUTION
+    safe_cm: 200.0       # > 200 cm = SAFE
+  critical_distance_m: 0.5
+  warning_distance_m: 1.0
+  safe_distance_m: 2.0
+  zones:
+    left_boundary: 0.33
+    right_boundary: 0.66
+
+direction:
+  clear_path_threshold: 2.0  # meters of clear space to recommend direction
+
+alerts:
+  voice:
+    enabled: true
+    speech_rate: 160
+    volume: 0.9
+    cooldown_seconds: 2.0
+  vibration:
+    type: "simulated"  # Options: "simulated", "gpio"
+    enabled: true
+    gpio_pins:
+      left: 17
+      center: 27
+      right: 22
+
+dashboard:
+  enabled: true
+  refresh_interval: 0.2
+
+logging:
+  enabled: true
+  level: "INFO"
+  format: "%(asctime)s - [%(name)s] - %(levelname)s - %(message)s"
+  log_file: "logs/system.log"
+  event_log: "logs/detection_events.csv"
+  system_log: "logs/system.log"
+
