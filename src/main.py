@@ -21,6 +21,7 @@ from src.sensors.ultrasonic_sensor import UltrasonicSensor
 from src.sensors.sensor_manager import SensorManager
 from src.sensors.scenario_engine import SensorScenarioEngine, CONTROLS_HELP
 from src.detection.yolo_detector import YoloDetector
+from src.detection.object_tracker import ObjectTracker
 from src.fusion.sensor_fusion import SensorFusionEngine
 from src.decision.risk_analyzer import RiskAnalyzer
 from src.decision.direction_analyzer import DirectionAnalyzer
@@ -160,6 +161,11 @@ class SmartNavigationShoeApp:
         self.logger.info("Shutdown complete.")
 
 
+def create_tracker(config: dict) -> Optional[ObjectTracker]:
+    """Object tracker smoothing YOLO flicker, unless tracking.enabled is false."""
+    return ObjectTracker(config=config) if config.get("tracking", {}).get("enabled", True) else None
+
+
 def create_scenario_engine(
     config: dict,
     sensor_manager: SensorManager,
@@ -276,6 +282,7 @@ def run_realtime_fusion(
         camera.release()
         return
 
+    tracker = create_tracker(config)
     fusion_engine = SensorFusionEngine(config=config)
     risk_analyzer = RiskAnalyzer(config=config)
     direction_analyzer = DirectionAnalyzer(config=config)
@@ -302,12 +309,13 @@ def run_realtime_fusion(
                 continue
 
             detection_result = detector.detect(frame)
-            scenario_engine.update(
-                detection_result.detections,
-                (detection_result.frame_width, detection_result.frame_height),
+            detections = (
+                tracker.update(detection_result.detections, detection_result.frame_width)
+                if tracker is not None else detection_result.detections
             )
+            scenario_engine.update(detections, (detection_result.frame_width, detection_result.frame_height))
             sensor_readings = sensor_manager.get_readings_list()
-            fused_obstacles = fusion_engine.fuse(detection_result.detections, sensor_readings)
+            fused_obstacles = fusion_engine.fuse(detections, sensor_readings)
             risk_assessment = risk_analyzer.evaluate(fused_obstacles, sensor_readings)
             direction = direction_analyzer.analyze_path(fused_obstacles, risk_assessment, sensor_readings)
 
@@ -494,6 +502,7 @@ def run_dashboard_mode(
 
     event_logger.log_system_message("YOLO model loaded")
 
+    tracker = create_tracker(config)
     fusion_engine = SensorFusionEngine(config=config)
     risk_analyzer = RiskAnalyzer(config=config)
     direction_analyzer = DirectionAnalyzer(config=config)
@@ -525,12 +534,13 @@ def run_dashboard_mode(
                 continue
 
             detection_result = detector.detect(frame)
-            scenario_engine.update(
-                detection_result.detections,
-                (detection_result.frame_width, detection_result.frame_height),
+            detections = (
+                tracker.update(detection_result.detections, detection_result.frame_width)
+                if tracker is not None else detection_result.detections
             )
+            scenario_engine.update(detections, (detection_result.frame_width, detection_result.frame_height))
             sensor_readings = sensor_manager.get_readings_list()
-            fused_obstacles = fusion_engine.fuse(detection_result.detections, sensor_readings)
+            fused_obstacles = fusion_engine.fuse(detections, sensor_readings)
             risk_assessment = risk_analyzer.evaluate(fused_obstacles, sensor_readings)
             direction = direction_analyzer.analyze_path(fused_obstacles, risk_assessment, sensor_readings)
 

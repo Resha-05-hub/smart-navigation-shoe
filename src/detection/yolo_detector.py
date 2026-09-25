@@ -252,7 +252,8 @@ class YoloDetector(DetectorInterface):
             cv2.rectangle(annotated_frame, (xmin, ymin), (xmax, ymax), color, thickness)
 
             conf_str = f"{int(obs.confidence * 100)}%" if obs.confidence <= 1.0 else f"{obs.confidence}%"
-            label_str = f"{obs.label} {conf_str} | {obs.zone.value} | {int(obs.sensor_distance_cm)}cm | {obs.risk_level.value}"
+            name = f"{obs.label} #{obs.object_id[6:]}" if obs.object_id.startswith("track_") else obs.label
+            label_str = f"{name} {conf_str} | {obs.zone.value} | {int(obs.sensor_distance_cm)}cm | {obs.risk_level.value}"
 
             (text_w, text_h), baseline = cv2.getTextSize(label_str, cv2.FONT_HERSHEY_SIMPLEX, 0.45, 1)
             text_ymin = max(ymin, text_h + 10)

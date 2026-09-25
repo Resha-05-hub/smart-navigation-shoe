@@ -32,17 +32,22 @@ class AlertManager:
         voice: VoiceAlertManager,
         audio: Optional[AudioManager] = None,
         cooldown_seconds: float = 2.0,
+        clear_confirm_seconds: float = 0.0,
         config: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.vibration = vibration
         self.voice = voice
         self.audio = audio or AudioManager()
         self.cooldown_seconds = cooldown_seconds
+        self.clear_confirm_seconds = clear_confirm_seconds  # "Path clear" only after this long without hazards
 
         if config:
             alert_cfg = config.get("alerts", {})
             voice_cfg = alert_cfg.get("voice", {})
             self.cooldown_seconds = voice_cfg.get("cooldown_seconds", cooldown_seconds)
+            self.clear_confirm_seconds = voice_cfg.get("clear_confirm_seconds", clear_confirm_seconds)
+
+        self._safe_since: Optional[float] = None
 
         self.last_triggered_time: float = 0.0
         self.last_triggered_risk: Optional[RiskLevel] = None
@@ -188,12 +193,24 @@ class AlertManager:
         suppress_reason = ""
 
         if overall_risk == RiskLevel.SAFE:
-            # SAFE state handling: trigger once if transitioning from a non-SAFE risk state, but never repeat continuously
-            if state_changed and self.last_triggered_risk is not None and self.last_triggered_risk != RiskLevel.SAFE:
+            self._safe_since = current_time if self._safe_since is None else self._safe_since
+        else:
+            self._safe_since = None
+
+        if overall_risk == RiskLevel.SAFE:
+            # SAFE state handling: announce once after leaving a hazard, only when the path has stayed
+            # clear for clear_confirm_seconds (a detection dropping out for a frame is not "clear")
+            leaving_hazard = (
+                state_changed
+                and self.last_triggered_risk is not None
+                and self.last_triggered_risk != RiskLevel.SAFE
+            )
+            confirmed = current_time - self._safe_since >= self.clear_confirm_seconds
+            if leaving_hazard and confirmed:
                 alert_triggered = True
             else:
                 alert_triggered = False
-                suppress_reason = "SAFE state active"
+                suppress_reason = "SAFE state active" if not leaving_hazard else "Confirming path clear"
         elif flapping:
             alert_triggered = False
             suppress_reason = "Flapping between recent states"

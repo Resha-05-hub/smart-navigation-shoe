@@ -45,6 +45,13 @@ detection:
     - potted plant
     - dining table
 
+tracking:
+  enabled: true
+  iou_threshold: 0.3     # Box overlap needed to treat a detection as the same object
+  max_missed_frames: 3   # Keep an object this many frames after YOLO loses it
+  min_hits: 2            # Frames an object must be seen before it is reported (drops one-frame ghosts)
+  box_smoothing: 0.7     # Weight of the newest box (1.0 = no smoothing)
+
 sensors:
   distance_sensor:
     type: "simulated"  # Options: "simulated", "ultrasonic"
@@ -125,6 +132,7 @@ risk_analysis:
     warning_cm: 100.0    # 50 - 100 cm = WARNING
     caution_cm: 200.0    # 100 - 200 cm = CAUTION
     safe_cm: 200.0       # > 200 cm = SAFE
+  hysteresis_cm: 10.0    # Risk rises at a threshold but only falls once 10 cm past it (stops flicker)
   critical_distance_m: 0.5
   warning_distance_m: 1.0
   safe_distance_m: 2.0
@@ -142,6 +150,7 @@ alerts:
     speech_rate: 160
     volume: 0.9
     cooldown_seconds: 2.0
+    clear_confirm_seconds: 1.0  # Say "Path clear" only after 1 s without hazards
   vibration:
     type: "simulated"  # Options: "simulated", "gpio"
     enabled: true

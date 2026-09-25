@@ -28,18 +28,23 @@ class SensorFusionEngine:
         self,
         default_range_m: float = 2.5,
         sensor_only_max_m: float = 2.0,
+        hysteresis_m: float = 0.0,
         config: Optional[Dict[str, Any]] = None,
     ) -> None:
         self.default_range_m = default_range_m
         self.sensor_only_max_m = sensor_only_max_m
+        self.hysteresis_m = hysteresis_m
+        self._sensor_only_zones: set = set()  # Zones that reported a sensor-only obstacle last frame
 
         if config:
             sensor_cfg = config.get("sensors", {}).get("distance_sensor", {})
             self.default_range_m = sensor_cfg.get("simulated_default_m", default_range_m)
             # Sensor-only obstacles are reported out to the CAUTION boundary
-            thresh_cm = config.get("risk_analysis", {}).get("thresholds_cm", {})
+            risk_cfg = config.get("risk_analysis", {})
+            thresh_cm = risk_cfg.get("thresholds_cm", {})
             if "caution_cm" in thresh_cm:
                 self.sensor_only_max_m = thresh_cm["caution_cm"] / 100.0
+            self.hysteresis_m = risk_cfg.get("hysteresis_cm", hysteresis_m * 100.0) / 100.0
 
     def fuse(
         self,
@@ -84,8 +89,9 @@ class SensorFusionEngine:
             else:
                 distance_m = self.default_range_m
 
+            object_id = f"track_{item.track_id}" if item.track_id >= 0 else f"fused_{idx}_{uuid.uuid4().hex[:6]}"
             fused_obstacle = FusedObstacle(
-                object_id=f"fused_{idx}_{uuid.uuid4().hex[:6]}",
+                object_id=object_id,
                 label=item.label,
                 confidence=item.confidence,
                 bbox=item.bbox,
@@ -95,13 +101,18 @@ class SensorFusionEngine:
             )
             fused_obstacles.append(fused_obstacle)
 
-        # Close sensor readings in zones with no visual detection become unidentified obstacles
+        # Close sensor readings in zones with no visual detection become unidentified obstacles.
+        # An obstacle already reported stays until it is hysteresis_m beyond the range, so noise
+        # around the boundary does not make it blink in and out.
         visual_zones = {obs.zone for obs in fused_obstacles}
+        sensor_only_zones = set()
         for zone in (ObstacleZone.LEFT, ObstacleZone.CENTER, ObstacleZone.RIGHT):
             reading = zone_sensor_map.get(zone)
             if zone in visual_zones or reading is None or not reading.is_valid:
                 continue
-            if 0 < reading.distance_m <= self.sensor_only_max_m:
+            max_m = self.sensor_only_max_m + (self.hysteresis_m if zone in self._sensor_only_zones else 0.0)
+            if 0 < reading.distance_m <= max_m:
+                sensor_only_zones.add(zone)
                 fused_obstacles.append(
                     FusedObstacle(
                         object_id=f"sensor_{zone.value.lower()}_{uuid.uuid4().hex[:6]}",
@@ -114,4 +125,5 @@ class SensorFusionEngine:
                     )
                 )
 
+        self._sensor_only_zones = sensor_only_zones
         return fused_obstacles

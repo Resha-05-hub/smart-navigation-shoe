@@ -31,8 +31,11 @@ class RiskAnalyzer:
         caution_distance_m: float = 2.0,      # 100 - 200 cm = CAUTION
         critical_distance_m: Optional[float] = None,
         safe_distance_m: Optional[float] = None,
+        hysteresis_m: float = 0.0,
         config: Optional[Dict[str, Any]] = None,
     ) -> None:
+        self.hysteresis_m = hysteresis_m
+        self._zone_levels: Dict[ObstacleZone, RiskLevel] = {}  # Last evaluated risk per zone
         self.is_legacy_mode = (critical_distance_m is not None)
         self.critical_distance_m = critical_distance_m or 0.8
         self.danger_distance_m = danger_distance_m
@@ -46,6 +49,7 @@ class RiskAnalyzer:
 
         if config:
             risk_cfg = config.get("risk_analysis", {})
+            self.hysteresis_m = risk_cfg.get("hysteresis_cm", hysteresis_m * 100.0) / 100.0
             thresh_cm = risk_cfg.get("thresholds_cm", {})
             if "danger_cm" in thresh_cm:
                 self.danger_distance_m = thresh_cm["danger_cm"] / 100.0
@@ -64,14 +68,29 @@ class RiskAnalyzer:
                 self.caution_distance_m = risk_cfg["safe_distance_m"]
 
     def classify_obstacle_risk(self, obstacle: FusedObstacle) -> RiskLevel:
-        """Determines risk level for a single obstacle based on distance thresholds."""
-        dist = obstacle.distance_m
+        """Determines risk level for a single obstacle based on distance thresholds (stateless)."""
+        return self._classify_distance(obstacle.distance_m, obstacle.zone)
 
+    def _classify_with_hysteresis(self, obstacle: FusedObstacle) -> RiskLevel:
+        """Escalates immediately, but only de-escalates once the obstacle is hysteresis_m past the threshold.
+
+        Without this, a stationary obstacle near a boundary (e.g. 200 cm with +/-1 cm sensor noise)
+        flips between two levels every frame.
+        """
+        raw = self._classify_distance(obstacle.distance_m, obstacle.zone)
+        previous = self._zone_levels.get(obstacle.zone)
+        if self.hysteresis_m <= 0 or previous is None or RISK_PRIORITY[raw] >= RISK_PRIORITY[previous]:
+            return raw
+
+        candidate = self._classify_distance(obstacle.distance_m - self.hysteresis_m, obstacle.zone)
+        return candidate if RISK_PRIORITY[candidate] < RISK_PRIORITY[previous] else previous
+
+    def _classify_distance(self, dist: float, zone: ObstacleZone) -> RiskLevel:
         if self.is_legacy_mode:
             if dist <= self.critical_distance_m:
                 return RiskLevel.CRITICAL
             elif dist <= self.warning_distance_m:
-                if obstacle.zone == ObstacleZone.CENTER:
+                if zone == ObstacleZone.CENTER:
                     return RiskLevel.HIGH
                 return RiskLevel.MEDIUM
             elif dist <= self.safe_distance_m:
@@ -114,6 +133,7 @@ class RiskAnalyzer:
         ]
 
         if not obstacles and not faulty_zones:
+            self._zone_levels = {}
             return RiskAssessment(
                 overall_risk_level=RiskLevel.SAFE,
                 critical_obstacles=[],
@@ -122,16 +142,23 @@ class RiskAnalyzer:
 
         highest_risk = RiskLevel.SAFE
         critical_items: List[FusedObstacle] = []
+        zone_levels: Dict[ObstacleZone, RiskLevel] = {}
 
         for obs in obstacles:
-            risk = self.classify_obstacle_risk(obs)
+            risk = self._classify_with_hysteresis(obs)
             obs.risk_level = risk
+            if RISK_PRIORITY[risk] > RISK_PRIORITY.get(zone_levels.get(obs.zone, RiskLevel.SAFE), 0):
+                zone_levels[obs.zone] = risk
+            else:
+                zone_levels.setdefault(obs.zone, risk)
 
             if RISK_PRIORITY.get(risk, 0) > RISK_PRIORITY.get(highest_risk, 0):
                 highest_risk = risk
 
             if risk in (RiskLevel.DANGER, RiskLevel.WARNING, RiskLevel.HIGH, RiskLevel.CRITICAL):
                 critical_items.append(obs)
+
+        self._zone_levels = zone_levels  # Zones without obstacles start fresh next frame
 
         if faulty_zones and RISK_PRIORITY[highest_risk] < RISK_PRIORITY[RiskLevel.CAUTION]:
             highest_risk = RiskLevel.CAUTION
