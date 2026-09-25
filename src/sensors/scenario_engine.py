@@ -12,7 +12,9 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .sensor_manager import SensorManager
+from .vision_distance_estimator import VisionDistanceEstimator
 from ..core.enums import ObstacleZone
+from ..core.models import DetectionItem
 from ..utils.logger import get_logger
 
 logger = get_logger("scenario_engine")
@@ -28,7 +30,7 @@ ZoneDistances = Dict[ObstacleZone, Optional[float]]
 
 CONTROLS_HELP = (
     "Keys: a/z LEFT  s/x CENTER  d/c RIGHT (closer/farther) | "
-    "0 clear | r reset | n next scenario | p pause | q quit"
+    "v camera-linked | 0 clear | r reset | n next scenario | p pause | q quit"
 )
 
 
@@ -107,13 +109,19 @@ def _opt_float(value: Any) -> Optional[float]:
 
 
 class SensorScenarioEngine:
-    """Moves simulated sensor distances by keyboard (manual mode) or scripted scenarios.
+    """Moves simulated sensor distances by keyboard (manual), scripted scenarios, or the camera view.
 
-    Call update() once per frame before reading the SensorManager, and pass OpenCV key
-    codes to handle_key() so the presenter can control obstacle distances live.
+    Modes:
+    - manual: the presenter moves each zone's obstacle with the keyboard.
+    - scenario name: a scripted keyframe timeline plays.
+    - camera: each zone reads the nearest YOLO object's estimated distance (camera-linked).
+
+    Call update() once per frame before reading the SensorManager (passing detections and frame
+    size for camera mode), and pass OpenCV key codes to handle_key() for live control.
     """
 
     MANUAL = "manual"
+    CAMERA = "camera"
 
     def __init__(
         self,
@@ -124,6 +132,9 @@ class SensorScenarioEngine:
         noise_cm: float = 0.0,
         loop: bool = True,
         seed: Optional[int] = None,
+        estimator: Optional[VisionDistanceEstimator] = None,
+        smoothing: float = 0.5,
+        hold_s: float = 0.5,
         config: Optional[Dict[str, Any]] = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
@@ -132,6 +143,9 @@ class SensorScenarioEngine:
         self.step_cm = step_cm
         self.noise_cm = noise_cm
         self.loop = loop
+        self.estimator = estimator or VisionDistanceEstimator(config=config)
+        self.smoothing = smoothing  # Weight of the newest camera estimate (1.0 = no smoothing)
+        self.hold_s = hold_s        # Keep a camera distance this long after its detection flickers out
         self._clock = clock
         self._rng = random.Random(seed)
         startup = self.MANUAL
@@ -151,6 +165,9 @@ class SensorScenarioEngine:
             startup = sim_cfg.get("startup", self.MANUAL) or self.MANUAL
             for name, scenario_cfg in (sim_cfg.get("scenarios") or {}).items():
                 self.scenarios[name] = Scenario.from_config(name, scenario_cfg)
+            cam_cfg = sim_cfg.get("camera_linked", {})
+            self.smoothing = cam_cfg.get("smoothing", smoothing)
+            self.hold_s = cam_cfg.get("hold_s", hold_s)
 
         self.min_cm = sensor_manager.min_distance_m * 100.0
         self.max_cm = sensor_manager.max_distance_m * 100.0
@@ -167,12 +184,20 @@ class SensorScenarioEngine:
         self._start_time: float = 0.0
         self._paused_at: Optional[float] = None
         self.finished: bool = False
+        self._camera: ZoneDistances = {zone: self.max_cm for zone in ZONES}
+        self._camera_last_seen: Dict[ObstacleZone, Optional[float]] = {zone: None for zone in ZONES}
 
-        if startup != self.MANUAL:
-            if startup in self.scenarios:
-                self.start_scenario(startup)
-            else:
-                logger.warning(f"Unknown startup scenario '{startup}'; starting in manual mode.")
+        self.startup_mode = startup
+        if startup not in (self.MANUAL, self.CAMERA) and startup not in self.scenarios:
+            logger.warning(f"Unknown startup mode '{startup}'; starting in manual mode.")
+            self.startup_mode = self.MANUAL
+        self._enter_startup_mode()
+
+    def _enter_startup_mode(self) -> None:
+        if self.startup_mode == self.CAMERA:
+            self.set_camera_linked()
+        elif self.startup_mode in self.scenarios:
+            self.start_scenario(self.startup_mode)
 
     # ------------------------------------------------------------------ control
 
@@ -229,14 +254,25 @@ class SensorScenarioEngine:
         base = self._manual.get(zone)
         self._manual[zone] = self._clamp((self.max_cm if base is None else base) + delta_cm)
 
+    def set_camera_linked(self) -> None:
+        """Drives each zone's sensor from the nearest detected object's estimated distance."""
+        self.mode = self.CAMERA
+        self._active = None
+        self._paused_at = None
+        self.finished = False
+        self._camera = {zone: self.max_cm for zone in ZONES}
+        self._camera_last_seen = {zone: None for zone in ZONES}
+        logger.info("Camera-linked simulated sensors enabled (distances estimated from the camera view).")
+
     def clear_all(self) -> None:
         """Clears the path: every sensor reads its maximum range."""
         self.set_distances_cm(self.max_cm, self.max_cm, self.max_cm)
 
     def reset(self) -> None:
-        """Returns to manual mode with the configured startup distances."""
+        """Returns to the configured startup mode (manual resets to the startup distances)."""
         self.set_manual()
         self._manual = dict(self._initial)
+        self._enter_startup_mode()
 
     def toggle_pause(self) -> None:
         """Pauses or resumes the running scripted scenario."""
@@ -271,6 +307,11 @@ class SensorScenarioEngine:
             self.next_scenario()
         elif char == "p":
             self.toggle_pause()
+        elif char == "v":
+            if self.mode == self.CAMERA:
+                self.set_manual()
+            else:
+                self.set_camera_linked()
         else:
             return False
         return True
@@ -286,6 +327,8 @@ class SensorScenarioEngine:
 
     def target_distances(self) -> ZoneDistances:
         """Noise-free distances the simulation is currently aiming for."""
+        if self.mode == self.CAMERA:
+            return dict(self._camera)
         if self._active is None:
             return dict(self._manual)
 
@@ -297,8 +340,45 @@ class SensorScenarioEngine:
             self.finished = True
         return self._active.distances_at(elapsed)
 
-    def update(self) -> ZoneDistances:
-        """Pushes the current distances (plus sensor noise) into the simulated sensors."""
+    def _update_camera_distances(
+        self,
+        detections: List[DetectionItem],
+        frame_size: Tuple[int, int],
+    ) -> None:
+        """Smooths per-zone camera estimates; a zone clears only after hold_s without detections."""
+        now = self._clock()
+        estimates = self.estimator.zone_distances_cm(detections, frame_size[0], frame_size[1])
+
+        for zone in ZONES:
+            estimate = estimates[zone]
+            last_seen = self._camera_last_seen[zone]
+            tracking = last_seen is not None and now - last_seen <= self.hold_s
+
+            if estimate is not None:
+                estimate = self._clamp(estimate)
+                previous = self._camera[zone]
+                if tracking and previous is not None:
+                    estimate = self.smoothing * estimate + (1.0 - self.smoothing) * previous
+                self._camera[zone] = estimate  # A newly appearing object is reported without lag
+                self._camera_last_seen[zone] = now
+            elif not tracking:
+                self._camera[zone] = self.max_cm
+                self._camera_last_seen[zone] = None
+
+    def update(
+        self,
+        detections: Optional[List[DetectionItem]] = None,
+        frame_size: Optional[Tuple[int, int]] = None,
+    ) -> ZoneDistances:
+        """Pushes the current distances (plus sensor noise) into the simulated sensors.
+
+        Args:
+            detections: YOLO detections for this frame (used in camera-linked mode).
+            frame_size: (width, height) of the analyzed frame (required for camera-linked mode).
+        """
+        if self.mode == self.CAMERA and frame_size is not None:
+            self._update_camera_distances(detections or [], frame_size)
+
         targets = self.target_distances()
         self._current = targets
         if not self.enabled:
@@ -321,6 +401,8 @@ class SensorScenarioEngine:
     @property
     def status_text(self) -> str:
         """Short mode description for dashboards, e.g. 'SCENARIO approaching_obstacle 3.2s'."""
+        if self.mode == self.CAMERA:
+            return "CAMERA-LINKED (estimated)"
         if self._active is None:
             return "MANUAL"
 

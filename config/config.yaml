@@ -62,10 +62,18 @@ sensors:
 
   # Software-only demo: drives the SIMULATED distance sensors (no physical HC-SR04 hardware).
   simulation:
-    startup: "manual"  # "manual" (keyboard control) or a scenario name below
+    startup: "camera"  # "camera" (camera-linked), "manual" (keyboard control), or a scenario name below
     step_cm: 10.0      # Distance change per key press
     noise_cm: 1.0      # Gaussian jitter mimicking real ultrasonic readings (0 = none)
     loop: true         # Scripted scenarios restart when finished (live camera modes)
+    # Camera-linked mode: each zone's simulated sensor reads the nearest YOLO object's distance,
+    # ESTIMATED with the pinhole model: distance = real_size * focal_px / box_size_px.
+    camera_linked:
+      horizontal_fov_deg: 60.0  # Laptop webcams are typically 55-78 deg; tune if distances read off
+      smoothing: 0.5            # Weight of the newest estimate (1.0 = no smoothing)
+      hold_s: 0.5               # Keep a distance this long when a detection flickers out
+      default_size_m: [1.0, 0.5]  # [height, width] for classes not listed in the code defaults
+      object_sizes_m: {}          # Overrides, e.g. person: [1.60, 0.42]
     # Keyframes: [time_s, left_cm, center_cm, right_cm]; values glide linearly between frames.
     # null = sensor fault (reported INVALID) from that keyframe until the next one.
     scenarios:

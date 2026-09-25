@@ -288,7 +288,10 @@ def run_realtime_fusion(config_path: str = "config/config.yaml", scenario: Optio
                 continue
 
             detection_result = detector.detect(frame)
-            scenario_engine.update()
+            scenario_engine.update(
+                detection_result.detections,
+                (detection_result.frame_width, detection_result.frame_height),
+            )
             sensor_readings = sensor_manager.get_readings_list()
             fused_obstacles = fusion_engine.fuse(detection_result.detections, sensor_readings)
             risk_assessment = risk_analyzer.evaluate(fused_obstacles)
@@ -514,7 +517,10 @@ def run_dashboard_mode(config_path: str = "config/config.yaml", scenario: Option
                 continue
 
             detection_result = detector.detect(frame)
-            scenario_engine.update()
+            scenario_engine.update(
+                detection_result.detections,
+                (detection_result.frame_width, detection_result.frame_height),
+            )
             sensor_readings = sensor_manager.get_readings_list()
             fused_obstacles = fusion_engine.fuse(detection_result.detections, sensor_readings)
             risk_assessment = risk_analyzer.evaluate(fused_obstacles)

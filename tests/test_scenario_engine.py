@@ -218,8 +218,8 @@ class TestScenarioEngineConfigAndPipeline(unittest.TestCase):
                      "mixed_zones", "sensor_fault"):
             self.assertIn(name, self.engine.scenario_names)
 
-        self.assertEqual(self.engine.mode, SensorScenarioEngine.MANUAL)
-        self.engine.update()
+        self.assertEqual(self.engine.mode, SensorScenarioEngine.CAMERA)
+        self.engine.update([], (640, 480))  # Camera sees nothing -> clear path
         fused = self.fusion.fuse([], self.manager.get_readings_list())
         self.assertEqual(self.risk.evaluate(fused).overall_risk_level, RiskLevel.SAFE)
 
