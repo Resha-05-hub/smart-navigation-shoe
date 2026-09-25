@@ -1,5 +1,7 @@
 # AI-Powered Smart Navigation Shoe for Visually Impaired People Using Computer Vision and Sensor Fusion
 
+**GitHub repository:** [github.com/Resha-05-hub/smart-navigation-shoe](https://github.com/Resha-05-hub/smart-navigation-shoe)
+
 ## Project Overview
 
 The **AI-Powered Smart Navigation Shoe** is an assistive-device prototype that gives real-time obstacle
@@ -57,18 +59,24 @@ A shoe-mounted system that:
 ## Quick Start (Windows)
 
 ```powershell
-# 1. Install dependencies into the project virtual environment (Python 3.11)
+# 1. Get the code
+git clone https://github.com/Resha-05-hub/smart-navigation-shoe.git
+cd smart-navigation-shoe
+
+# 2. Install dependencies into the project virtual environment (Python 3.11)
 py -3.11 -m venv venvv                      # only if venvv does not exist yet
 venvv\Scripts\python.exe -m pip install -r requirements.txt
 
-# 2. Create the demo video used as a webcam fallback (about 5 MB, not stored in git)
+# 3. Create the demo video used as a webcam fallback (about 5 MB, not stored in git)
 venvv\Scripts\python.exe scripts\make_demo_video.py
 
-# 3. Run the full demonstration (dashboard mode is the default)
+# 4. Run the full demonstration (dashboard mode is the default)
 venvv\Scripts\python.exe -m src.main
 ```
 
-The first launch loads YOLO (about 5–10 s). Press **`q`** or **`ESC`** in the video window to exit.
+The YOLO weights (`models/yolov8n.pt`, 6 MB) are not stored in git: they download automatically on the
+first run, so that run needs internet access. After that, launch takes about 5–10 s to load YOLO.
+Press **`q`** or **`ESC`** in the video window to exit.
 
 ---
 
