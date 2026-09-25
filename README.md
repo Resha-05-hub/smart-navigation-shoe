@@ -234,8 +234,12 @@ smart-navigation-shoe/
 * **Distances are simulated.** Camera-linked distances are estimates from box size and typical object
   sizes; accuracy depends on the webcam's field of view. Wide poses (arms outstretched) read closer
   than reality — the error is on the safe side.
-* **Only COCO classes are recognised.** Stairs, doors, and potholes are not; on the real shoe the
-  ultrasonic sensors cover these, which the demo shows with manual and scripted sensor distances.
+* **Only COCO classes are recognised.** Stairs, doors, and potholes are not. Obstacles that stick up
+  (a door, a wall, a step up) are still caught by the forward-facing ultrasonic sensors, which the demo
+  shows with manual and scripted sensor distances.
+* **Drop-offs are not detected.** Downward stairs, kerbs, and potholes are missed by both the camera
+  and the forward-facing sensors, which read the space beyond a drop as clear. Detecting them would
+  need a downward-facing distance sensor (future work).
 * **CPU only.** Measured **6.5 frames per second** end to end (YOLO ~145 ms of each ~155 ms frame) on an
   AMD Ryzen 5 5500U laptop running on battery, dashboard mode, 640×480; plugged in may be faster.
   A Raspberry Pi would need a smaller input size
