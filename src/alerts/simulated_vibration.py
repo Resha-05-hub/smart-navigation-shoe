@@ -60,10 +60,9 @@ class SimulatedVibration(VibrationInterface):
     ) -> str:
         """Triggers simulated directional vibration motors based on risk level and spatial zone."""
         status_text = self.get_vibration_text(risk_level, zone)
+        if self.enabled and status_text != self.last_vibration_status:
+            logger.info(f"[SIMULATED HAPTIC] {status_text}")  # Log changes only, not every frame
         self.last_vibration_status = status_text
-
-        if self.enabled and status_text != "VIBRATION: OFF":
-            logger.info(f"[SIMULATED HAPTIC] {status_text}")
 
         return status_text
 

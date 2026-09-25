@@ -4,7 +4,7 @@ import sys
 import time
 import argparse
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
 # Add project root directory to sys.path to support execution as a script
 project_root = Path(__file__).resolve().parent.parent
@@ -12,21 +12,13 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from src.utils.helpers import load_config
-from src.utils.logger import setup_logger
-from src.camera.webcam_camera import WebcamCamera
-from src.camera.raspberry_pi_camera import RaspberryPiCamera
+from src.utils.logger import setup_logging, get_logger
+from src.camera.camera_interface import CameraInterface
 from src.camera.camera_factory import open_camera
-from src.sensors.simulated_sensor import SimulatedDistanceSensor
-from src.sensors.ultrasonic_sensor import UltrasonicSensor
 from src.sensors.sensor_manager import SensorManager
-from src.sensors.scenario_engine import SensorScenarioEngine, CONTROLS_HELP
+from src.sensors.scenario_engine import CONTROLS_HELP
 from src.detection.yolo_detector import YoloDetector
-from src.detection.object_tracker import ObjectTracker
-from src.fusion.sensor_fusion import SensorFusionEngine
-from src.decision.risk_analyzer import RiskAnalyzer
-from src.decision.direction_analyzer import DirectionAnalyzer
 from src.alerts.simulated_vibration import SimulatedVibration
-from src.alerts.raspberry_pi_vibration import RaspberryPiVibration
 from src.alerts.voice_alert import VoiceAlertManager
 from src.alerts.alert_manager import AlertManager
 from src.core.models import FusedObstacle, RiskAssessment, BoundingBox
@@ -34,149 +26,158 @@ from src.core.enums import RiskLevel, ObstacleZone
 from src.dashboard.dashboard_data import DashboardSnapshot
 from src.dashboard.dashboard import Dashboard
 from src.event_logging.event_logger import EventLogger
+from src.pipeline import NavigationPipeline, PipelineResult, create_detector
 from src.utils.visual import FrameRateMeter
+
+MODES = ["dashboard", "fusion", "scenario", "detection", "alerts", "sensors", "simulation", "architecture"]
+DEFAULT_WINDOW_NAME = "Smart Navigation Shoe"
+
+
+# --------------------------------------------------------------------------- shared helpers
+
+
+def load_detector(config: dict) -> Optional[YoloDetector]:
+    """Creates the YOLO detector and loads its weights, printing progress; None on failure."""
+    detector = create_detector(config)
+    print(f"[INFO] Loading YOLO model weights from '{detector.model_path}'...")
+    if not detector.load_model():
+        print(f"[ERROR] Failed to load YOLO model weights from '{detector.model_path}'.")
+        return None
+    return detector
+
+
+def next_frame(camera: CameraInterface) -> Optional[Any]:
+    """Next frame from the source; None once a finite (video/image) source has ended."""
+    while True:
+        success, frame = camera.read_frame()
+        if success and frame is not None:
+            return frame
+        if not camera.is_opened():
+            return None
+        time.sleep(0.03)  # Transient read failure: retry
+
+
+def is_quit_key(key: int) -> bool:
+    return key == ord("q") or key == 27
+
+
+def window_name(config: dict) -> str:
+    return config.get("detection", {}).get("display", {}).get("window_name", DEFAULT_WINDOW_NAME)
+
+
+def build_snapshot(result: PipelineResult, event_logger: EventLogger, **status: Any) -> DashboardSnapshot:
+    """Dashboard snapshot of a pipeline step; status carries camera/YOLO/simulation/speed fields."""
+    return DashboardSnapshot.from_pipeline_results(
+        fused_obstacles=result.fused_obstacles,
+        sensor_readings=result.sensor_readings,
+        overall_risk=result.risk_assessment.overall_risk_level,
+        vibration_action=result.vibration_text,
+        voice_message=result.last_spoken or "Path clear.",  # The last message the user heard
+        recent_events=event_logger.recent_events,
+        direction=result.direction,
+        **status,
+    )
+
+
+def report_camera_failure(config: dict, source: Optional[str]) -> str:
+    """Prints why no frame source could be opened and returns the message for logging."""
+    if source:
+        message = f"Could not open video/image source '{source}'."
+    else:
+        cam_cfg = config.get("camera", {})
+        message = f"Could not connect to webcam device ID {cam_cfg.get('device_id', 0)}"
+        fallback = cam_cfg.get("fallback_source")
+        message += f" or fallback source '{fallback}'." if fallback else "."
+    print(f"[ERROR] {message}")
+    print("[HINT] Close other apps using the webcam, or play a recording with --source path/to/video.mp4 "
+          "(run 'python scripts/make_demo_video.py' to create the demo clip).")
+    return message
+
+
+def close_windows() -> None:
+    try:
+        import cv2
+        cv2.destroyAllWindows()
+    except Exception:
+        pass
+
+
+# --------------------------------------------------------------------------- architecture mode
 
 
 class SmartNavigationShoeApp:
-    """Main application orchestrator for Smart Navigation Shoe."""
+    """Main application orchestrator for Smart Navigation Shoe (architecture / simulation mode)."""
 
     def __init__(self, config_path: str = "config/config.yaml") -> None:
         self.config = load_config(config_path)
-        log_cfg = self.config.get("logging", {})
-        self.logger = setup_logger(
-            name="smart_shoe",
-            level=log_cfg.get("level", "INFO"),
-            log_file=log_cfg.get("log_file"),
-            log_format=log_cfg.get("format"),
-        )
+        self.logger = get_logger("smart_shoe")
         self.logger.info("Initializing Smart Navigation Shoe System...")
-
-        # 1. Initialize Camera Module
-        cam_cfg = self.config.get("camera", {})
-        cam_type = cam_cfg.get("type", "webcam")
-        if cam_type == "webcam":
-            self.camera = WebcamCamera(
-                device_id=cam_cfg.get("device_id", 0),
-                width=cam_cfg.get("width", 640),
-                height=cam_cfg.get("height", 480),
-                fps=cam_cfg.get("fps", 30),
-                simulation_fallback=cam_cfg.get("simulation_fallback", True),
-            )
-        else:
-            self.camera = RaspberryPiCamera(
-                width=cam_cfg.get("width", 640),
-                height=cam_cfg.get("height", 480),
-                fps=cam_cfg.get("fps", 30),
-            )
-
-        # 2. Initialize Sensor Manager (LEFT, CENTER, RIGHT distance sensors)
-        self.sensor_manager = SensorManager(config=self.config)
-
-        # 3. Initialize YOLO Detector Interface
-        det_cfg = self.config.get("detection", {})
-        self.detector = YoloDetector(
-            model_path=det_cfg.get("model_path", "models/yolov8n.pt"),
-            confidence_threshold=det_cfg.get("confidence_threshold", 0.5),
-            iou_threshold=det_cfg.get("iou_threshold", 0.45),
-            device=det_cfg.get("device", "cpu"),
-            target_classes=det_cfg.get("target_classes"),
-        )
+        self.camera: Optional[CameraInterface] = None
+        self.detector = create_detector(self.config)
         self.detector.load_model()
-
-        # 4. Initialize Sensor Fusion Engine
-        self.fusion_engine = SensorFusionEngine(config=self.config)
-
-        # 5. Initialize Decision Engine (Risk & Direction Analyzers)
-        self.risk_analyzer = RiskAnalyzer(config=self.config)
-
-        self.direction_analyzer = DirectionAnalyzer(config=self.config)
-
-        # 6. Initialize Alert System
-        alert_cfg = self.config.get("alerts", {})
-        vib_type = alert_cfg.get("vibration", {}).get("type", "simulated")
-        if vib_type == "simulated":
-            self.vibration = SimulatedVibration(
-                enabled=alert_cfg.get("vibration", {}).get("enabled", True)
-            )
-        else:
-            vib_pins = alert_cfg.get("vibration", {}).get("gpio_pins", {})
-            self.vibration = RaspberryPiVibration(
-                left_pin=vib_pins.get("left", 17),
-                center_pin=vib_pins.get("center", 27),
-                right_pin=vib_pins.get("right", 22),
-            )
-
-        voice_cfg = alert_cfg.get("voice", {})
-        self.voice = VoiceAlertManager(
-            enabled=voice_cfg.get("enabled", True),
-            speech_rate=voice_cfg.get("speech_rate", 160),
-            volume=voice_cfg.get("volume", 0.9),
-        )
-
-        self.alert_manager = AlertManager(
-            vibration=self.vibration,
-            voice=self.voice,
-            config=self.config,
-        )
+        self.pipeline = NavigationPipeline(self.config)
 
     def initialize(self) -> bool:
-        """Connects camera and sensor peripherals."""
+        """Connects the frame source (webcam, or the configured fallback video)."""
         self.logger.info("Connecting hardware/simulated interfaces...")
-        cam_ok = self.camera.connect()
-        readings = self.sensor_manager.read_all_sensors()
-        all_valid = any(r.is_valid for r in readings.values())
-        self.logger.info(
-            f"Camera status: {self.camera.status.value}, Distance sensors active: {all_valid}"
-        )
-        return cam_ok
+        self.camera = open_camera(self.config)
+        readings = self.pipeline.sensor_manager.read_all_sensors()
+        sensors_ok = any(r.is_valid for r in readings.values())
+        camera_desc = self.camera.source_description if self.camera else "UNAVAILABLE"
+        self.logger.info(f"Camera: {camera_desc}, Distance sensors active: {sensors_ok}")
+        return self.camera is not None
 
     def run_step(self) -> None:
         """Executes a single processing loop step."""
-        success, frame = self.camera.read_frame()
+        success, frame = self.camera.read_frame() if self.camera else (False, None)
         if not success or frame is None:
             self.logger.warning("Failed to capture frame from camera source.")
             return
 
         detection_result = self.detector.detect(frame)
-        sensor_readings = self.sensor_manager.get_readings_list()
-        fused_obstacles = self.fusion_engine.fuse(
-            detections=detection_result.detections,
-            sensor_readings=sensor_readings,
+        result = self.pipeline.process(
+            detection_result.detections, (detection_result.frame_width, detection_result.frame_height)
         )
-        risk_assessment = self.risk_analyzer.evaluate(fused_obstacles, sensor_readings)
-        direction = self.direction_analyzer.analyze_path(fused_obstacles, risk_assessment, sensor_readings)
-        vib_text, alert_status = self.alert_manager.evaluate_and_trigger(risk_assessment, fused_obstacles, direction)
-
-        primary_dist = sensor_readings[0].distance_m if sensor_readings else 0.0
-        self.logger.info(
-            f"Step Completed | Distance: {primary_dist:.2f}m | Risk: {risk_assessment.overall_risk_level.value} | {vib_text} | {alert_status}"
+        center = next((r for r in result.sensor_readings if r.position == ObstacleZone.CENTER), None)
+        center_str = f"{center.distance_m:.2f}m" if center and center.is_valid else "N/A"
+        message = (
+            f"Step Completed | Center distance: {center_str} | "
+            f"Risk: {result.risk_assessment.overall_risk_level.value} | "
+            f"Direction: {result.direction.recommended_direction.value} | "
+            f"VIBRATION: {result.vibration_text} | {result.alert_status}"
         )
+        print(message)
+        self.logger.info(message)
 
     def shutdown(self) -> None:
         """Cleans up system resources."""
         self.logger.info("Shutting down Smart Navigation Shoe application...")
-        self.camera.release()
-        self.vibration.stop_all()
-        self.voice.stop()
+        if self.camera is not None:
+            self.camera.release()
+        self.pipeline.shutdown()
         self.logger.info("Shutdown complete.")
 
 
-def create_tracker(config: dict) -> Optional[ObjectTracker]:
-    """Object tracker smoothing YOLO flicker, unless tracking.enabled is false."""
-    return ObjectTracker(config=config) if config.get("tracking", {}).get("enabled", True) else None
+def run_architecture_demo(config_path: str = "config/config.yaml") -> None:
+    """Phase 1: runs three steps of the full architecture and exits."""
+    print("=" * 70)
+    print("  AI-Powered Smart Navigation Shoe — Simulation Architecture Run")
+    print("=" * 70)
+    app = SmartNavigationShoeApp(config_path=config_path)
+    if not app.initialize():
+        print("[ERROR] Application initialization failed (no camera or fallback source).")
+        app.shutdown()
+        return
+    print("\n[INFO] Running 3 demonstration architecture steps...\n")
+    for i in range(3):
+        print(f"--- Iteration {i + 1} ---")
+        app.run_step()
+        time.sleep(0.5)
+    app.shutdown()
+    print("\n[SUCCESS] Phase 1 architecture loop executed successfully.")
 
 
-def create_scenario_engine(
-    config: dict,
-    sensor_manager: SensorManager,
-    scenario: Optional[str] = None,
-    loop: Optional[bool] = None,
-) -> SensorScenarioEngine:
-    """Builds the simulated-sensor scenario engine, optionally starting a named scenario."""
-    engine = SensorScenarioEngine(sensor_manager, config=config)
-    if scenario:
-        engine.start_scenario(scenario, loop=loop)
-    return engine
+# --------------------------------------------------------------------------- component demos
 
 
 def run_alert_demo(config_path: str = "config/config.yaml") -> None:
@@ -220,135 +221,9 @@ def run_alert_demo(config_path: str = "config/config.yaml") -> None:
         print(f"  Voice     : {status_out}")
         time.sleep(0.4)
 
+    voice.stop()
     print("\n" + "=" * 70)
     print("[SUCCESS] Phase 5 Alert System Demonstration Completed Cleanly.\n")
-
-
-def report_camera_failure(config: dict, source: Optional[str]) -> str:
-    """Prints why no frame source could be opened and returns the message for logging."""
-    if source:
-        message = f"Could not open video/image source '{source}'."
-    else:
-        cam_cfg = config.get("camera", {})
-        message = f"Could not connect to webcam device ID {cam_cfg.get('device_id', 0)}"
-        fallback = cam_cfg.get("fallback_source")
-        message += f" or fallback source '{fallback}'." if fallback else "."
-    print(f"[ERROR] {message}")
-    print("[HINT] Close other apps using the webcam, or play a recording with --source path/to/video.mp4 "
-          "(run 'python scripts/make_demo_video.py' to create the demo clip).")
-    return message
-
-
-def run_realtime_fusion(
-    config_path: str = "config/config.yaml",
-    scenario: Optional[str] = None,
-    source: Optional[str] = None,
-) -> None:
-    """Phase 4 & 5: Real-Time Laptop Webcam + YOLO + Distance Sensors + Sensor Fusion + Risk Analysis + Alert System."""
-    config = load_config(config_path)
-    det_cfg = config.get("detection", {})
-    disp_cfg = det_cfg.get("display", {})
-
-    print("=" * 70)
-    print("  AI-Powered Smart Navigation Shoe — Phase 4/5 Sensor Fusion & Alerts")
-    print("=" * 70)
-    print("Press 'q' or 'ESC' on the camera display window to exit.\n")
-
-    camera = open_camera(config, source)
-    if camera is None:
-        report_camera_failure(config, source)
-        return
-    print(f"[INFO] Frame source: {camera.source_description}")
-
-    sensor_manager = SensorManager(config=config)
-    scenario_engine = create_scenario_engine(config, sensor_manager, scenario)
-    print("[INFO] Sensor Manager initialized with simulated spatial distance sensors:")
-    print(sensor_manager.format_sensor_display(display_unit="cm"))
-    print(f"[INFO] Simulation: {scenario_engine.status_text}")
-    print(f"[INFO] {CONTROLS_HELP}")
-
-    model_path = det_cfg.get("model_path", "models/yolov8n.pt")
-    detector = YoloDetector(
-        model_path=model_path,
-        confidence_threshold=det_cfg.get("confidence_threshold", 0.5),
-        iou_threshold=det_cfg.get("iou_threshold", 0.45),
-        device=det_cfg.get("device", "cpu"),
-        target_classes=det_cfg.get("target_classes"),
-    )
-
-    print(f"\n[INFO] Loading YOLO model weights from '{model_path}'...")
-    if not detector.load_model():
-        print(f"[ERROR] Failed to load YOLO model weights from '{model_path}'.")
-        camera.release()
-        return
-
-    tracker = create_tracker(config)
-    fusion_engine = SensorFusionEngine(config=config)
-    risk_analyzer = RiskAnalyzer(config=config)
-    direction_analyzer = DirectionAnalyzer(config=config)
-
-    vibration = SimulatedVibration(enabled=True)
-    voice = VoiceAlertManager(enabled=True)
-    alert_manager = AlertManager(vibration=vibration, voice=voice, config=config)
-
-    print("[INFO] Webcam, YOLO, Sensor Fusion, Risk Analyzer & Alert Manager ready. Starting stream...\n")
-    window_name = disp_cfg.get("window_name", "Smart Navigation Shoe - Phase 5 Real-Time System")
-
-    try:
-        import cv2
-        last_logged_time = 0.0
-
-        while True:
-            success, frame = camera.read_frame()
-            if not success or frame is None:
-                if not camera.is_opened():
-                    print("\n[INFO] Video/image source finished.")
-                    break
-                print("[WARNING] Empty or invalid frame received from camera. Retrying...")
-                time.sleep(0.03)
-                continue
-
-            detection_result = detector.detect(frame)
-            detections = (
-                tracker.update(detection_result.detections, detection_result.frame_width)
-                if tracker is not None else detection_result.detections
-            )
-            scenario_engine.update(detections, (detection_result.frame_width, detection_result.frame_height))
-            sensor_readings = sensor_manager.get_readings_list()
-            fused_obstacles = fusion_engine.fuse(detections, sensor_readings)
-            risk_assessment = risk_analyzer.evaluate(fused_obstacles, sensor_readings)
-            direction = direction_analyzer.analyze_path(fused_obstacles, risk_assessment, sensor_readings)
-
-            # Trigger Alerts (Vibration simulation + Voice alert debouncing)
-            vib_text, alert_status = alert_manager.evaluate_and_trigger(risk_assessment, fused_obstacles, direction)
-
-            current_time = time.time()
-            if fused_obstacles and (current_time - last_logged_time > 1.5):
-                for obs in fused_obstacles:
-                    print(obs.format_display())
-                print(f"Overall Risk: {risk_assessment.overall_risk_level.value} | {vib_text} | Status: {alert_status}\n")
-                last_logged_time = current_time
-
-            annotated_frame = detector.draw_fused_obstacles(frame, fused_obstacles)
-            cv2.imshow(window_name, annotated_frame)
-
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q') or key == 27:
-                print("\n[INFO] User requested exit ('q' / ESC pressed). Stopping live video feed...")
-                break
-            if scenario_engine.handle_key(key):
-                print(f"[SIMULATION] {scenario_engine.status_text} | {scenario_engine.distances_text}")
-    except Exception as e:
-        print(f"[ERROR] Error during real-time sensor fusion loop: {e}")
-    finally:
-        camera.release()
-        voice.stop()
-        try:
-            import cv2
-            cv2.destroyAllWindows()
-        except Exception:
-            pass
-        print("[INFO] Camera released and OpenCV display windows closed cleanly.")
 
 
 def run_sensor_demo(config_path: str = "config/config.yaml") -> None:
@@ -364,18 +239,18 @@ def run_sensor_demo(config_path: str = "config/config.yaml") -> None:
 
     print("\n2. Testing Sensor Safety & Invalid Status Handling:")
     print("  Setting LEFT sensor to -50 cm (Negative Invalid Reading)...")
-    left_sensor = sensor_manager.get_sensor(list(sensor_manager.sensors.keys())[0])
+    left_sensor: Any = sensor_manager.get_sensor(ObstacleZone.LEFT)
     if left_sensor and hasattr(left_sensor, "set_simulated_distance_cm"):
         left_sensor.set_simulated_distance_cm(-50.0)
 
     print("  Setting RIGHT sensor to 500 cm (Out Of Bounds > 400 cm)...")
-    right_sensor = sensor_manager.get_sensor(list(sensor_manager.sensors.keys())[2])
+    right_sensor: Any = sensor_manager.get_sensor(ObstacleZone.RIGHT)
     if right_sensor and hasattr(right_sensor, "set_simulated_distance_cm"):
         right_sensor.set_simulated_distance_cm(500.0)
 
     print(sensor_manager.format_sensor_display(display_unit="cm"))
 
-    print("\n3. Resetting Sensors to Normal Baseline Values (LEFT=150cm, CENTER=80cm, RIGHT=220cm)...")
+    print("\n3. Setting Example Distances (LEFT=150cm, CENTER=80cm, RIGHT=220cm)...")
     sensor_manager.set_simulated_distances_cm(150.0, 80.0, 220.0)
     print(sensor_manager.format_sensor_display(display_unit="cm"))
 
@@ -383,10 +258,9 @@ def run_sensor_demo(config_path: str = "config/config.yaml") -> None:
 
 
 def run_realtime_detection(config_path: str = "config/config.yaml", source: Optional[str] = None) -> None:
-    """Phase 2: Runs real-time object detection using laptop webcam and Ultralytics YOLO."""
+    """Phase 2: Raw real-time YOLO object detection (no sensors, tracking, or alerts)."""
     config = load_config(config_path)
-    det_cfg = config.get("detection", {})
-    disp_cfg = det_cfg.get("display", {})
+    disp_cfg = config.get("detection", {}).get("display", {})
 
     print("=" * 70)
     print("  AI-Powered Smart Navigation Shoe — Phase 2 Real-Time YOLO Detection")
@@ -399,35 +273,19 @@ def run_realtime_detection(config_path: str = "config/config.yaml", source: Opti
         return
     print(f"[INFO] Frame source: {camera.source_description}")
 
-    model_path = det_cfg.get("model_path", "models/yolov8n.pt")
-    detector = YoloDetector(
-        model_path=model_path,
-        confidence_threshold=det_cfg.get("confidence_threshold", 0.5),
-        iou_threshold=det_cfg.get("iou_threshold", 0.45),
-        device=det_cfg.get("device", "cpu"),
-        target_classes=det_cfg.get("target_classes"),
-    )
-
-    print(f"[INFO] Loading YOLO model weights from '{model_path}'...")
-    if not detector.load_model():
-        print(f"[ERROR] Failed to load YOLO model weights from '{model_path}'.")
+    detector = load_detector(config)
+    if detector is None:
         camera.release()
         return
 
-    print("[INFO] Webcam & YOLO initialized. Starting live video feed...")
-    window_name = disp_cfg.get("window_name", "Smart Navigation Shoe - Phase 2 Real-Time Detection")
-
+    print("[INFO] Camera & YOLO initialized. Starting live video feed...")
     try:
         import cv2
         while True:
-            success, frame = camera.read_frame()
-            if not success or frame is None:
-                if not camera.is_opened():
-                    print("\n[INFO] Video/image source finished.")
-                    break
-                print("[WARNING] Empty or invalid frame received from camera. Retrying...")
-                time.sleep(0.03)
-                continue
+            frame = next_frame(camera)
+            if frame is None:
+                print("\n[INFO] Video/image source finished.")
+                break
 
             detection_result = detector.detect(frame)
             annotated_frame = detector.draw_detections(
@@ -436,22 +294,94 @@ def run_realtime_detection(config_path: str = "config/config.yaml", source: Opti
                 show_confidence=disp_cfg.get("show_confidence", True),
                 show_box=disp_cfg.get("show_box", True),
             )
+            cv2.imshow(window_name(config), annotated_frame)
 
-            cv2.imshow(window_name, annotated_frame)
-
-            key = cv2.waitKey(1) & 0xFF
-            if key == ord('q') or key == 27:
+            if is_quit_key(cv2.waitKey(1) & 0xFF):
                 print("[INFO] User requested exit ('q' / ESC pressed). Stopping camera stream...")
                 break
     except Exception as e:
         print(f"[ERROR] Error during real-time webcam detection loop: {e}")
     finally:
         camera.release()
-        try:
-            import cv2
-            cv2.destroyAllWindows()
-        except Exception:
-            pass
+        close_windows()
+        print("[INFO] Camera released and OpenCV display windows closed cleanly.")
+
+
+# --------------------------------------------------------------------------- full pipeline modes
+
+
+def run_realtime_fusion(
+    config_path: str = "config/config.yaml",
+    scenario: Optional[str] = None,
+    source: Optional[str] = None,
+) -> None:
+    """Phase 4 & 5: Camera + YOLO + simulated sensors + fusion + risk + direction + alerts (console output)."""
+    config = load_config(config_path)
+
+    print("=" * 70)
+    print("  AI-Powered Smart Navigation Shoe — Phase 4/5 Sensor Fusion & Alerts")
+    print("=" * 70)
+    print("Press 'q' or 'ESC' on the camera display window to exit.\n")
+
+    camera = open_camera(config, source)
+    if camera is None:
+        report_camera_failure(config, source)
+        return
+    print(f"[INFO] Frame source: {camera.source_description}")
+
+    pipeline = NavigationPipeline(config, scenario=scenario)
+    print("[INFO] Sensor Manager initialized with simulated spatial distance sensors:")
+    print(pipeline.sensor_manager.format_sensor_display(display_unit="cm"))
+    print(f"[INFO] Simulation: {pipeline.scenario_engine.status_text}")
+    print(f"[INFO] {CONTROLS_HELP}\n")
+
+    detector = load_detector(config)
+    if detector is None:
+        camera.release()
+        pipeline.shutdown()
+        return
+
+    print("[INFO] Camera, YOLO, Sensor Fusion, Risk Analyzer & Alert Manager ready. Starting stream...\n")
+    try:
+        import cv2
+        last_logged_time = 0.0
+
+        while True:
+            frame = next_frame(camera)
+            if frame is None:
+                print("\n[INFO] Video/image source finished.")
+                break
+
+            detection_result = detector.detect(frame)
+            result = pipeline.process(
+                detection_result.detections, (detection_result.frame_width, detection_result.frame_height)
+            )
+
+            current_time = time.time()
+            if result.fused_obstacles and (current_time - last_logged_time > 1.5):
+                for obs in result.fused_obstacles:
+                    print(obs.format_display())
+                print(
+                    f"Overall Risk: {result.risk_assessment.overall_risk_level.value} | "
+                    f"VIBRATION: {result.vibration_text} | Status: {result.alert_status}\n"
+                )
+                last_logged_time = current_time
+
+            cv2.imshow(window_name(config), detector.draw_fused_obstacles(frame, result.fused_obstacles))
+
+            key = cv2.waitKey(1) & 0xFF
+            if is_quit_key(key):
+                print("\n[INFO] User requested exit ('q' / ESC pressed). Stopping live video feed...")
+                break
+            if pipeline.scenario_engine.handle_key(key):
+                engine = pipeline.scenario_engine
+                print(f"[SIMULATION] {engine.status_text} | {engine.distances_text}")
+    except Exception as e:
+        print(f"[ERROR] Error during real-time sensor fusion loop: {e}")
+    finally:
+        camera.release()
+        pipeline.shutdown()
+        close_windows()
         print("[INFO] Camera released and OpenCV display windows closed cleanly.")
 
 
@@ -460,16 +390,14 @@ def run_dashboard_mode(
     scenario: Optional[str] = None,
     source: Optional[str] = None,
 ) -> None:
-    """Phase 6: Real-time Dashboard + Persistent Event & System Logging."""
+    """Phase 6+: full demo view — video with risk-colored boxes, simulated shoe panel, CLI dashboard, logging."""
     config = load_config(config_path)
-    det_cfg = config.get("detection", {})
-    disp_cfg = det_cfg.get("display", {})
 
     event_logger = EventLogger(config=config)
     event_logger.log_system_message("Dashboard mode started")
 
     print("=" * 70)
-    print("  AI-Powered Smart Navigation Shoe — Phase 6 Dashboard & Event Logging")
+    print("  AI-Powered Smart Navigation Shoe — Dashboard & Event Logging")
     print("=" * 70)
     print("Press 'q' or 'ESC' on the camera display window to exit.\n")
 
@@ -477,139 +405,77 @@ def run_dashboard_mode(
     if camera is None:
         event_logger.log_system_message(report_camera_failure(config, source), level="ERROR")
         return
-
     event_logger.log_system_message(f"Camera connected: {camera.source_description}")
 
-    sensor_manager = SensorManager(config=config)
-    scenario_engine = create_scenario_engine(config, sensor_manager, scenario)
-    event_logger.log_system_message(f"Sensors initialized (SIMULATED, {scenario_engine.status_text})")
+    pipeline = NavigationPipeline(config, scenario=scenario)
+    event_logger.log_system_message(f"Sensors initialized (SIMULATED, {pipeline.scenario_engine.status_text})")
 
-    model_path = det_cfg.get("model_path", "models/yolov8n.pt")
-    detector = YoloDetector(
-        model_path=model_path,
-        confidence_threshold=det_cfg.get("confidence_threshold", 0.5),
-        iou_threshold=det_cfg.get("iou_threshold", 0.45),
-        device=det_cfg.get("device", "cpu"),
-        target_classes=det_cfg.get("target_classes"),
-    )
-
-    print(f"[INFO] Loading YOLO model weights from '{model_path}'...")
-    if not detector.load_model():
-        event_logger.log_system_message(f"Failed to load YOLO model weights from '{model_path}'", level="ERROR")
-        print(f"[ERROR] Failed to load YOLO model weights from '{model_path}'.")
+    detector = load_detector(config)
+    if detector is None:
+        event_logger.log_system_message(f"Failed to load YOLO model weights from '{config.get('detection', {}).get('model_path')}'", level="ERROR")
         camera.release()
+        pipeline.shutdown()
         return
-
     event_logger.log_system_message("YOLO model loaded")
-
-    tracker = create_tracker(config)
-    fusion_engine = SensorFusionEngine(config=config)
-    risk_analyzer = RiskAnalyzer(config=config)
-    direction_analyzer = DirectionAnalyzer(config=config)
-
-    vibration = SimulatedVibration(enabled=True)
-    voice = VoiceAlertManager(enabled=True)
-    alert_manager = AlertManager(vibration=vibration, voice=voice, config=config)
 
     dashboard = Dashboard(config=config)
     event_logger.log_system_message("Dashboard started")
-
-    print("[INFO] Dashboard, Webcam, YOLO, Sensor Fusion & Event Logger active.\n")
-    window_name = disp_cfg.get("window_name", "Smart Navigation Shoe - Phase 6 Dashboard")
+    print("[INFO] Dashboard, Camera, YOLO, Sensor Fusion & Event Logger active.\n")
 
     try:
         import cv2
-
         last_cli_update_time = 0.0
         frame_rate = FrameRateMeter()
 
         while True:
-            success, frame = camera.read_frame()
-            if not success or frame is None:
-                if not camera.is_opened():
-                    event_logger.log_system_message("Video/image source finished")
-                    print("\n[INFO] Video/image source finished.")
-                    break
-                time.sleep(0.03)
-                continue
+            frame = next_frame(camera)
+            if frame is None:
+                event_logger.log_system_message("Video/image source finished")
+                print("\n[INFO] Video/image source finished.")
+                break
 
             detection_result = detector.detect(frame)
-            detections = (
-                tracker.update(detection_result.detections, detection_result.frame_width)
-                if tracker is not None else detection_result.detections
+            result = pipeline.process(
+                detection_result.detections, (detection_result.frame_width, detection_result.frame_height)
             )
-            scenario_engine.update(detections, (detection_result.frame_width, detection_result.frame_height))
-            sensor_readings = sensor_manager.get_readings_list()
-            fused_obstacles = fusion_engine.fuse(detections, sensor_readings)
-            risk_assessment = risk_analyzer.evaluate(fused_obstacles, sensor_readings)
-            direction = direction_analyzer.analyze_path(fused_obstacles, risk_assessment, sensor_readings)
+            NavigationPipeline.log_event(event_logger, result)
 
-            vib_action, _alert_status = alert_manager.evaluate_and_trigger(risk_assessment, fused_obstacles, direction)
-            vib_text = vib_action.replace("VIBRATION: ", "")
-            alert_triggered = alert_manager.last_alert_triggered
-
-            # Log event (debounced); only messages actually spoken are recorded as voice output
-            event_logger.log_event(
-                fused_obstacles=fused_obstacles,
-                overall_risk=risk_assessment.overall_risk_level,
-                vibration_action=vib_text,
-                voice_message=alert_manager.last_triggered_text if alert_triggered else "",
-                alert_triggered=alert_triggered,
-                direction=direction.recommended_direction.value,
-            )
-
-            # Build Dashboard Snapshot (voice line shows the last message the user heard)
-            snapshot = DashboardSnapshot.from_pipeline_results(
-                fused_obstacles=fused_obstacles,
-                sensor_readings=sensor_readings,
-                overall_risk=risk_assessment.overall_risk_level,
-                vibration_action=vib_text,
-                voice_message=alert_manager.last_triggered_text or "Path clear.",
-                recent_events=event_logger.recent_events,
+            snapshot = build_snapshot(
+                result,
+                event_logger,
                 camera_status=f"CONNECTED ({camera.source_description})" if camera.is_connected else "DISCONNECTED",
                 yolo_status="ACTIVE" if detector.is_loaded() else "INACTIVE",
                 sensors_status="ACTIVE (SIMULATED)",
-                sensor_mode=scenario_engine.status_text,
+                sensor_mode=pipeline.scenario_engine.status_text,
                 controls_hint=CONTROLS_HELP,
-                direction=direction,
                 fps=frame_rate.tick(),
                 inference_ms=detection_result.processing_time_ms,
             )
 
-            # Redraw ASCII terminal dashboard in place periodically
             now = time.time()
             if now - last_cli_update_time >= dashboard.refresh_interval:
                 dashboard.display_cli(snapshot, clear_screen=True)
                 last_cli_update_time = now
 
-            # Risk-colored boxes, zone lines, status, and the simulated shoe panel
-            annotated_frame = detector.draw_fused_obstacles(frame, fused_obstacles)
-            annotated_frame = dashboard.render_frame(annotated_frame, snapshot)
-
-            cv2.imshow(window_name, annotated_frame)
+            annotated_frame = detector.draw_fused_obstacles(frame, result.fused_obstacles)
+            cv2.imshow(window_name(config), dashboard.render_frame(annotated_frame, snapshot))
 
             key = cv2.waitKey(1) & 0xFF
-            if key == ord('q') or key == 27:
+            if is_quit_key(key):
                 event_logger.log_system_message("User requested exit from dashboard mode")
                 print("\n[INFO] User requested exit ('q' / ESC pressed). Stopping dashboard stream...")
                 break
-            if scenario_engine.handle_key(key):
-                event_logger.log_system_message(
-                    f"Simulation control: {scenario_engine.status_text} | {scenario_engine.distances_text}"
-                )
-
+            if pipeline.scenario_engine.handle_key(key):
+                engine = pipeline.scenario_engine
+                event_logger.log_system_message(f"Simulation control: {engine.status_text} | {engine.distances_text}")
     except Exception as e:
         event_logger.log_system_message(f"Error during real-time dashboard loop: {e}", level="ERROR")
         print(f"[ERROR] Error during real-time dashboard loop: {e}")
     finally:
         camera.release()
         event_logger.log_system_message("Camera released")
-        voice.stop()
-        try:
-            import cv2
-            cv2.destroyAllWindows()
-        except Exception:
-            pass
+        pipeline.shutdown()
+        close_windows()
         event_logger.log_system_message("Dashboard closed cleanly")
         print("[INFO] Camera released and dashboard display window closed cleanly.")
 
@@ -640,27 +506,22 @@ def run_scenario_mode(config_path: str = "config/config.yaml", scenario: Optiona
     """Software-only demo without a camera: plays scripted sensor scenarios through the full pipeline.
 
     Detections are empty, so every obstacle comes from the SIMULATED distance sensors
-    (sensor-only fusion), exercising risk analysis, vibration, voice, dashboard, and event logging.
+    (sensor-only fusion), exercising risk analysis, direction, vibration, voice, dashboard, and logging.
     """
     config = load_config(config_path)
     tick_s = config.get("sensors", {}).get("distance_sensor", {}).get("update_interval_sec", 0.1)
     min_scenario_s = 5.0  # Static (single keyframe) scenarios still get time to be heard
     tail_s = 1.5          # Hold the final state so its alert is announced
 
-    sensor_manager = SensorManager(config=config)
-    scenario_engine = create_scenario_engine(config, sensor_manager)
-    names = [scenario] if scenario else scenario_engine.scenario_names
+    pipeline = NavigationPipeline(config, use_tracker=False)
+    engine = pipeline.scenario_engine
+    names = [scenario] if scenario else engine.scenario_names
     if not names:
         print("[ERROR] No scenarios defined under sensors.simulation.scenarios in the config.")
+        pipeline.shutdown()
         return
 
     event_logger = EventLogger(config=config)
-    fusion_engine = SensorFusionEngine(config=config)
-    risk_analyzer = RiskAnalyzer(config=config)
-    direction_analyzer = DirectionAnalyzer(config=config)
-    vibration = SimulatedVibration(enabled=True)
-    voice = VoiceAlertManager(enabled=True)
-    alert_manager = AlertManager(vibration=vibration, voice=voice, config=config)
     dashboard = Dashboard(config=config)
     frame_rate = FrameRateMeter()
 
@@ -671,51 +532,27 @@ def run_scenario_mode(config_path: str = "config/config.yaml", scenario: Optiona
             import cv2
         except ImportError:
             cv2 = None
-    window_name = "Smart Navigation Shoe - Sensor Scenario (no camera)"
+    scenario_window = f"{window_name(config)} - Sensor Scenario (no camera)"
 
     event_logger.log_system_message(f"Scenario mode started: {', '.join(names)}")
 
     try:
         for index, name in enumerate(names, start=1):
-            scenario_engine.start_scenario(name, loop=False)
-            play_s = max(scenario_engine.scenarios[name].duration_s, min_scenario_s) + tail_s
-            end_time = time.monotonic() + play_s
+            engine.start_scenario(name, loop=False)
+            description = engine.scenarios[name].description
+            end_time = time.monotonic() + max(engine.scenarios[name].duration_s, min_scenario_s) + tail_s
 
             while time.monotonic() < end_time:
-                scenario_engine.update()
-                sensor_readings = sensor_manager.get_readings_list()
-                fused_obstacles = fusion_engine.fuse([], sensor_readings)
-                risk_assessment = risk_analyzer.evaluate(fused_obstacles, sensor_readings)
-                direction = direction_analyzer.analyze_path(fused_obstacles, risk_assessment, sensor_readings)
-
-                vib_action, _alert_status = alert_manager.evaluate_and_trigger(
-                    risk_assessment, fused_obstacles, direction
-                )
-                vib_text = vib_action.replace("VIBRATION: ", "")
-                alert_triggered = alert_manager.last_alert_triggered
-
-                event_logger.log_event(
-                    fused_obstacles=fused_obstacles,
-                    overall_risk=risk_assessment.overall_risk_level,
-                    vibration_action=vib_text,
-                    voice_message=alert_manager.last_triggered_text if alert_triggered else "",
-                    alert_triggered=alert_triggered,
-                    direction=direction.recommended_direction.value,
-                )
-
-                snapshot = DashboardSnapshot.from_pipeline_results(
-                    fused_obstacles=fused_obstacles,
-                    sensor_readings=sensor_readings,
-                    overall_risk=risk_assessment.overall_risk_level,
-                    vibration_action=vib_text,
-                    voice_message=alert_manager.last_triggered_text or "Path clear.",
-                    recent_events=event_logger.recent_events,
+                result = pipeline.process()
+                NavigationPipeline.log_event(event_logger, result)
+                snapshot = build_snapshot(
+                    result,
+                    event_logger,
                     camera_status="NOT USED (scenario mode)",
                     yolo_status="NOT USED (sensor-only)",
                     sensors_status="ACTIVE (SIMULATED)",
-                    sensor_mode=f"{scenario_engine.status_text} [{index}/{len(names)}]",
-                    controls_hint=f"{scenario_engine.scenarios[name].description} | Ctrl+C to stop",
-                    direction=direction,
+                    sensor_mode=f"{engine.status_text} [{index}/{len(names)}]",
+                    controls_hint=f"{description} | Ctrl+C to stop",
                     fps=frame_rate.tick(),
                 )
                 dashboard.display_cli(snapshot, clear_screen=True)
@@ -723,33 +560,38 @@ def run_scenario_mode(config_path: str = "config/config.yaml", scenario: Optiona
                 if cv2 is None:
                     time.sleep(tick_s)
                     continue
-                placeholder = scenario_placeholder_frame(name, scenario_engine.scenarios[name].description)
-                cv2.imshow(window_name, dashboard.render_frame(placeholder, snapshot))
-                key = cv2.waitKey(max(1, int(tick_s * 1000))) & 0xFF
-                if key == ord("q") or key == 27:
+                placeholder = scenario_placeholder_frame(name, description)
+                cv2.imshow(scenario_window, dashboard.render_frame(placeholder, snapshot))
+                if is_quit_key(cv2.waitKey(max(1, int(tick_s * 1000))) & 0xFF):
                     raise KeyboardInterrupt
 
         print("\n[SUCCESS] Scenario playback completed.")
     except KeyboardInterrupt:
         print("\n[INFO] Scenario playback interrupted.")
     finally:
-        voice.stop()
+        pipeline.shutdown()
         if cv2 is not None:
             cv2.destroyAllWindows()
         event_logger.log_system_message("Scenario mode closed cleanly")
 
 
+# --------------------------------------------------------------------------- entry point
+
+
 def main() -> None:
     """Main execution function supporting CLI argument parsing."""
     parser = argparse.ArgumentParser(
-        description="Smart Navigation Shoe - AI Assistive Navigation System"
+        description="Smart Navigation Shoe - AI Assistive Navigation System (software-only demonstration)"
     )
     parser.add_argument(
         "--mode",
         type=str,
-        default="fusion",
-        choices=["fusion", "alerts", "detection", "sensors", "simulation", "architecture", "dashboard", "scenario"],
-        help="Execution mode: 'fusion' for sensor fusion, 'alerts' for alert demo, 'sensors' for sensor demo, 'detection' for live YOLO, 'simulation' for test loop, 'dashboard' for Phase 6 dashboard & logging, 'scenario' for camera-free scripted sensor scenarios",
+        default=None,
+        choices=MODES,
+        help="dashboard: full demo view (default, see system.mode in the config); "
+             "fusion: pipeline with console output; scenario: camera-free scripted sensor scenarios; "
+             "detection: raw YOLO only; alerts / sensors: component demos; "
+             "simulation / architecture: 3-step architecture run.",
     )
     parser.add_argument(
         "--config",
@@ -773,44 +615,35 @@ def main() -> None:
     )
 
     args, _ = parser.parse_known_args()
+    config = load_config(args.config)
+    setup_logging(config)
+
+    mode = args.mode or config.get("system", {}).get("mode", "dashboard")
+    if mode not in MODES:
+        print(f"[ERROR] Unknown mode '{mode}' in config system.mode. Choose from: {', '.join(MODES)}")
+        return
 
     if args.scenario:
-        available = list(
-            load_config(args.config).get("sensors", {}).get("simulation", {}).get("scenarios", {}) or {}
-        )
+        available = list(config.get("sensors", {}).get("simulation", {}).get("scenarios", {}) or {})
         if args.scenario not in available:
             print(f"[ERROR] Unknown scenario '{args.scenario}'. Available: {', '.join(available) or 'none'}")
             return
 
-    if args.mode == "dashboard":
+    if mode == "dashboard":
         run_dashboard_mode(config_path=args.config, scenario=args.scenario, source=args.source)
-    elif args.mode == "scenario":
+    elif mode == "scenario":
         run_scenario_mode(config_path=args.config, scenario=args.scenario)
-    elif args.mode == "fusion":
+    elif mode == "fusion":
         run_realtime_fusion(config_path=args.config, scenario=args.scenario, source=args.source)
-    elif args.mode == "alerts":
+    elif mode == "alerts":
         run_alert_demo(config_path=args.config)
-    elif args.mode == "detection":
+    elif mode == "detection":
         run_realtime_detection(config_path=args.config, source=args.source)
-    elif args.mode == "sensors":
+    elif mode == "sensors":
         run_sensor_demo(config_path=args.config)
     else:
-        print("=" * 70)
-        print("  AI-Powered Smart Navigation Shoe — Simulation Architecture Run")
-        print("=" * 70)
-        app = SmartNavigationShoeApp(config_path=args.config)
-        if app.initialize():
-            print("\n[INFO] Running 3 demonstration architecture steps...\n")
-            for i in range(3):
-                print(f"--- Iteration {i+1} ---")
-                app.run_step()
-                time.sleep(0.5)
-            app.shutdown()
-            print("\n[SUCCESS] Phase 1 architecture loop executed successfully.")
-        else:
-            print("[ERROR] Application initialization failed.")
+        run_architecture_demo(config_path=args.config)
 
 
 if __name__ == "__main__":
     main()
-

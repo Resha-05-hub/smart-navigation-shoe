@@ -4,13 +4,11 @@ import csv
 import logging
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, List, Tuple, Union
-import time
+from typing import Optional, List, Union
 
 from src.core.models import FusedObstacle, RiskAssessment
 from src.core.enums import RiskLevel, ObstacleZone
 from src.dashboard.dashboard_data import RecentEvent
-from src.utils.logger import setup_logger, get_logger
 
 
 CSV_HEADERS = [
@@ -50,33 +48,36 @@ class EventLogger:
         self.max_recent_events = max_recent_events
 
         self.recent_events: List[RecentEvent] = []
-        self._last_event_key: Optional[Tuple] = None
-        self._last_log_timestamp: float = 0.0
 
         if self.enabled:
             self._ensure_log_files()
 
-        # System logger instance
-        logger_name = f"smart_shoe_system_{abs(hash(str(self.system_log_path)))}"
-        self.system_logger = logging.getLogger(logger_name)
+        # System logger: when setup_logging() already writes this file, messages simply propagate to it;
+        # otherwise (e.g. standalone use or tests) this logger writes the file itself.
+        self.system_logger = logging.getLogger("smart_shoe.events")
         self.system_logger.setLevel(logging.INFO)
+        for handler in list(self.system_logger.handlers):
+            if getattr(handler, "_event_logger", False):
+                self.system_logger.removeHandler(handler)
+                handler.close()
 
-        if not self.system_logger.handlers:
-            fmt = "%(asctime)s - [%(name)s] - %(levelname)s - %(message)s"
-            formatter = logging.Formatter(fmt)
+        if self._root_writes_to(self.system_log_path):
+            self.system_logger.propagate = True
+        else:
+            self.system_logger.propagate = False
+            fh = logging.FileHandler(str(self.system_log_path), encoding="utf-8")
+            fh.setFormatter(logging.Formatter("%(asctime)s - [%(name)s] - %(levelname)s - %(message)s"))
+            fh._event_logger = True  # type: ignore[attr-defined]
+            self.system_logger.addHandler(fh)
 
-            # File Handler
-            if self.system_log_path:
-                fh = logging.FileHandler(str(self.system_log_path), encoding="utf-8")
-                fh.setFormatter(formatter)
-                self.system_logger.addHandler(fh)
-
-            # Console Handler
-            import sys
-            ch = logging.StreamHandler(sys.stdout)
-            ch.setFormatter(formatter)
-            self.system_logger.addHandler(ch)
-
+    @staticmethod
+    def _root_writes_to(path: Path) -> bool:
+        """True if application-wide logging already has a file handler for this path."""
+        target = path.resolve()
+        return any(
+            isinstance(h, logging.FileHandler) and Path(h.baseFilename).resolve() == target
+            for h in logging.getLogger().handlers
+        )
 
 
     def _ensure_log_files(self) -> None:
@@ -110,7 +111,6 @@ class EventLogger:
         zone_str: str,
         dist_cm: float,
         risk_str: str,
-        is_alert_triggered: bool = False,
     ) -> bool:
         """Checks if an event state matches a recent event for the same object and zone."""
         for rec in self.recent_events[:5]:
@@ -146,9 +146,7 @@ class EventLogger:
             return False
 
         risk_str = overall_risk.value if isinstance(overall_risk, RiskLevel) else str(overall_risk)
-        is_alert_triggered = alert_triggered
         alert_status_str = "TRIGGERED" if alert_triggered else "SUPPRESSED"
-        now_ts = time.time()
         logged_any = False
 
         now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -159,7 +157,7 @@ class EventLogger:
             zone_str = "NONE"
             dist_cm = 0.0
 
-            if force or not self._is_duplicate_recent_event(obj_name, zone_str, dist_cm, risk_str, is_alert_triggered):
+            if force or not self._is_duplicate_recent_event(obj_name, zone_str, dist_cm, risk_str):
                 with open(self.event_log_path, mode="a", newline="", encoding="utf-8") as f:
                     writer = csv.writer(f)
                     writer.writerow([
@@ -186,8 +184,6 @@ class EventLogger:
                 if len(self.recent_events) > self.max_recent_events:
                     self.recent_events = self.recent_events[: self.max_recent_events]
 
-                self._last_event_key = (obj_name, zone_str, 0, risk_str, vibration_action, voice_message)
-                self._last_log_timestamp = now_ts
                 logged_any = True
         else:
             for obs in fused_obstacles:
@@ -205,7 +201,7 @@ class EventLogger:
                     else str(obs.risk_level)
                 )
 
-                if force or not self._is_duplicate_recent_event(obj_name, zone_str, dist_cm, obs_risk, is_alert_triggered):
+                if force or not self._is_duplicate_recent_event(obj_name, zone_str, dist_cm, obs_risk):
                     with open(self.event_log_path, mode="a", newline="", encoding="utf-8") as f:
                         writer = csv.writer(f)
                         writer.writerow([
@@ -232,12 +228,10 @@ class EventLogger:
                     if len(self.recent_events) > self.max_recent_events:
                         self.recent_events = self.recent_events[: self.max_recent_events]
 
-                    if obs_risk in ("WARNING", "DANGER") and is_alert_triggered:
+                    if obs_risk in ("WARNING", "DANGER") and alert_triggered:
                         self.system_logger.info(
                             f"{obs_risk} alert triggered | Object: {obj_name} ({zone_str}, {int(round(dist_cm))}cm) | Vib: {vibration_action} | Voice: '{voice_message}'"
                         )
-                    self._last_event_key = (obj_name, zone_str, int(round(dist_cm)), obs_risk, vibration_action, voice_message)
-                    self._last_log_timestamp = now_ts
                     logged_any = True
 
         return logged_any
