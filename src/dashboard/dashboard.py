@@ -31,6 +31,7 @@ class Dashboard:
         lines.append(f"Camera          : {snapshot.system_status.camera_status}")
         lines.append(f"YOLO            : {snapshot.system_status.yolo_status}")
         lines.append(f"Sensors         : {snapshot.system_status.sensors_status}")
+        lines.append(f"Simulation      : {snapshot.sensor_mode}")
         lines.append("")
         lines.append("CURRENT DETECTION")
         lines.append("")
@@ -71,6 +72,8 @@ class Dashboard:
             lines.append("No events logged yet.")
 
         lines.append("--------------------------------------------------")
+        if snapshot.controls_hint:
+            lines.append(snapshot.controls_hint)
         return "\n".join(lines)
 
     def display_cli(self, snapshot: DashboardSnapshot, clear_screen: bool = False) -> None:
@@ -125,8 +128,11 @@ class Dashboard:
         )
 
         # Sensors Bar
-        sensor_str = "Sensors (SIMULATED): " + " | ".join(
-            [f"{s.name}: {int(round(s.distance_cm))}cm" for s in snapshot.sensors]
+        sensor_str = f"Sensors ({snapshot.sensor_mode}): " + " | ".join(
+            [
+                f"{s.name}: {int(round(s.distance_cm))}cm" if s.health_status == "HEALTHY" else f"{s.name}: N/A"
+                for s in snapshot.sensors
+            ]
         )
         cv2.putText(
             annotated,

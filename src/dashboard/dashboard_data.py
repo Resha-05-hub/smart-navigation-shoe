@@ -72,6 +72,8 @@ class DashboardSnapshot:
     recent_events: List[RecentEvent] = field(default_factory=list)
     overall_risk: str = "SAFE"
     timestamp: datetime = field(default_factory=datetime.now)
+    sensor_mode: str = "SIMULATED"  # e.g. "MANUAL" or "SCENARIO approaching_obstacle 3.2s"
+    controls_hint: str = ""
 
     @classmethod
     def from_pipeline_results(
@@ -85,6 +87,8 @@ class DashboardSnapshot:
         camera_status: str = "CONNECTED",
         yolo_status: str = "ACTIVE",
         sensors_status: str = "ACTIVE (SIMULATED)",
+        sensor_mode: str = "SIMULATED",
+        controls_hint: str = "",
     ) -> "DashboardSnapshot":
         """Factory method to construct snapshot from raw pipeline outputs."""
         risk_str = overall_risk.value if isinstance(overall_risk, RiskLevel) else str(overall_risk)
@@ -146,4 +150,6 @@ class DashboardSnapshot:
             recent_events=recent_events or [],
             overall_risk=risk_str,
             timestamp=datetime.now(),
+            sensor_mode=sensor_mode,
+            controls_hint=controls_hint,
         )

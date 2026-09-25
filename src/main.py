@@ -4,6 +4,7 @@ import sys
 import time
 import argparse
 from pathlib import Path
+from typing import Optional
 
 # Add project root directory to sys.path to support execution as a script
 project_root = Path(__file__).resolve().parent.parent
@@ -17,6 +18,7 @@ from src.camera.raspberry_pi_camera import RaspberryPiCamera
 from src.sensors.simulated_sensor import SimulatedDistanceSensor
 from src.sensors.ultrasonic_sensor import UltrasonicSensor
 from src.sensors.sensor_manager import SensorManager
+from src.sensors.scenario_engine import SensorScenarioEngine, CONTROLS_HELP
 from src.detection.yolo_detector import YoloDetector
 from src.fusion.sensor_fusion import SensorFusionEngine
 from src.decision.risk_analyzer import RiskAnalyzer
@@ -158,6 +160,19 @@ class SmartNavigationShoeApp:
         self.logger.info("Shutdown complete.")
 
 
+def create_scenario_engine(
+    config: dict,
+    sensor_manager: SensorManager,
+    scenario: Optional[str] = None,
+    loop: Optional[bool] = None,
+) -> SensorScenarioEngine:
+    """Builds the simulated-sensor scenario engine, optionally starting a named scenario."""
+    engine = SensorScenarioEngine(sensor_manager, config=config)
+    if scenario:
+        engine.start_scenario(scenario, loop=loop)
+    return engine
+
+
 def run_alert_demo(config_path: str = "config/config.yaml") -> None:
     """Phase 5: Demonstrates directional vibration simulation and voice debouncing."""
     config = load_config(config_path)
@@ -203,7 +218,7 @@ def run_alert_demo(config_path: str = "config/config.yaml") -> None:
     print("[SUCCESS] Phase 5 Alert System Demonstration Completed Cleanly.\n")
 
 
-def run_realtime_fusion(config_path: str = "config/config.yaml") -> None:
+def run_realtime_fusion(config_path: str = "config/config.yaml", scenario: Optional[str] = None) -> None:
     """Phase 4 & 5: Real-Time Laptop Webcam + YOLO + Distance Sensors + Sensor Fusion + Risk Analysis + Alert System."""
     config = load_config(config_path)
     cam_cfg = config.get("camera", {})
@@ -230,8 +245,11 @@ def run_realtime_fusion(config_path: str = "config/config.yaml") -> None:
         return
 
     sensor_manager = SensorManager(config=config)
+    scenario_engine = create_scenario_engine(config, sensor_manager, scenario)
     print("[INFO] Sensor Manager initialized with simulated spatial distance sensors:")
     print(sensor_manager.format_sensor_display(display_unit="cm"))
+    print(f"[INFO] Simulation: {scenario_engine.status_text}")
+    print(f"[INFO] {CONTROLS_HELP}")
 
     model_path = det_cfg.get("model_path", "models/yolov8n.pt")
     detector = YoloDetector(
@@ -270,6 +288,7 @@ def run_realtime_fusion(config_path: str = "config/config.yaml") -> None:
                 continue
 
             detection_result = detector.detect(frame)
+            scenario_engine.update()
             sensor_readings = sensor_manager.get_readings_list()
             fused_obstacles = fusion_engine.fuse(detection_result.detections, sensor_readings)
             risk_assessment = risk_analyzer.evaluate(fused_obstacles)
@@ -291,6 +310,8 @@ def run_realtime_fusion(config_path: str = "config/config.yaml") -> None:
             if key == ord('q') or key == 27:
                 print("\n[INFO] User requested exit ('q' / ESC pressed). Stopping live video feed...")
                 break
+            if scenario_engine.handle_key(key):
+                print(f"[SIMULATION] {scenario_engine.status_text} | {scenario_engine.distances_text}")
     except Exception as e:
         print(f"[ERROR] Error during real-time sensor fusion loop: {e}")
     finally:
@@ -414,7 +435,7 @@ def run_realtime_detection(config_path: str = "config/config.yaml") -> None:
         print("[INFO] Camera released and OpenCV display windows closed cleanly.")
 
 
-def run_dashboard_mode(config_path: str = "config/config.yaml") -> None:
+def run_dashboard_mode(config_path: str = "config/config.yaml", scenario: Optional[str] = None) -> None:
     """Phase 6: Real-time Dashboard + Persistent Event & System Logging."""
     config = load_config(config_path)
     cam_cfg = config.get("camera", {})
@@ -447,7 +468,8 @@ def run_dashboard_mode(config_path: str = "config/config.yaml") -> None:
     event_logger.log_system_message("Camera connected")
 
     sensor_manager = SensorManager(config=config)
-    event_logger.log_system_message("Sensors initialized (SIMULATED)")
+    scenario_engine = create_scenario_engine(config, sensor_manager, scenario)
+    event_logger.log_system_message(f"Sensors initialized (SIMULATED, {scenario_engine.status_text})")
 
     model_path = det_cfg.get("model_path", "models/yolov8n.pt")
     detector = YoloDetector(
@@ -492,6 +514,7 @@ def run_dashboard_mode(config_path: str = "config/config.yaml") -> None:
                 continue
 
             detection_result = detector.detect(frame)
+            scenario_engine.update()
             sensor_readings = sensor_manager.get_readings_list()
             fused_obstacles = fusion_engine.fuse(detection_result.detections, sensor_readings)
             risk_assessment = risk_analyzer.evaluate(fused_obstacles)
@@ -520,6 +543,8 @@ def run_dashboard_mode(config_path: str = "config/config.yaml") -> None:
                 camera_status="CONNECTED" if camera.is_connected else "DISCONNECTED",
                 yolo_status="ACTIVE" if detector.is_loaded() else "INACTIVE",
                 sensors_status="ACTIVE (SIMULATED)",
+                sensor_mode=scenario_engine.status_text,
+                controls_hint=CONTROLS_HELP,
             )
 
             # Redraw ASCII terminal dashboard in place periodically
@@ -539,6 +564,10 @@ def run_dashboard_mode(config_path: str = "config/config.yaml") -> None:
                 event_logger.log_system_message("User requested exit from dashboard mode")
                 print("\n[INFO] User requested exit ('q' / ESC pressed). Stopping dashboard stream...")
                 break
+            if scenario_engine.handle_key(key):
+                event_logger.log_system_message(
+                    f"Simulation control: {scenario_engine.status_text} | {scenario_engine.distances_text}"
+                )
 
     except Exception as e:
         event_logger.log_system_message(f"Error during real-time dashboard loop: {e}", level="ERROR")
@@ -556,6 +585,82 @@ def run_dashboard_mode(config_path: str = "config/config.yaml") -> None:
         print("[INFO] Camera released and dashboard display window closed cleanly.")
 
 
+def run_scenario_mode(config_path: str = "config/config.yaml", scenario: Optional[str] = None) -> None:
+    """Software-only demo without a camera: plays scripted sensor scenarios through the full pipeline.
+
+    Detections are empty, so every obstacle comes from the SIMULATED distance sensors
+    (sensor-only fusion), exercising risk analysis, vibration, voice, dashboard, and event logging.
+    """
+    config = load_config(config_path)
+    tick_s = config.get("sensors", {}).get("distance_sensor", {}).get("update_interval_sec", 0.1)
+    min_scenario_s = 5.0  # Static (single keyframe) scenarios still get time to be heard
+    tail_s = 1.5          # Hold the final state so its alert is announced
+
+    sensor_manager = SensorManager(config=config)
+    scenario_engine = create_scenario_engine(config, sensor_manager)
+    names = [scenario] if scenario else scenario_engine.scenario_names
+    if not names:
+        print("[ERROR] No scenarios defined under sensors.simulation.scenarios in the config.")
+        return
+
+    event_logger = EventLogger(config=config)
+    fusion_engine = SensorFusionEngine(config=config)
+    risk_analyzer = RiskAnalyzer(config=config)
+    vibration = SimulatedVibration(enabled=True)
+    voice = VoiceAlertManager(enabled=True)
+    alert_manager = AlertManager(vibration=vibration, voice=voice, config=config)
+    dashboard = Dashboard(config=config)
+
+    event_logger.log_system_message(f"Scenario mode started: {', '.join(names)}")
+
+    try:
+        for index, name in enumerate(names, start=1):
+            scenario_engine.start_scenario(name, loop=False)
+            play_s = max(scenario_engine.scenarios[name].duration_s, min_scenario_s) + tail_s
+            end_time = time.monotonic() + play_s
+
+            while time.monotonic() < end_time:
+                scenario_engine.update()
+                sensor_readings = sensor_manager.get_readings_list()
+                fused_obstacles = fusion_engine.fuse([], sensor_readings)
+                risk_assessment = risk_analyzer.evaluate(fused_obstacles)
+
+                vib_action, _alert_status = alert_manager.evaluate_and_trigger(risk_assessment, fused_obstacles)
+                vib_text = vib_action.replace("VIBRATION: ", "")
+                alert_triggered = alert_manager.last_alert_triggered
+
+                event_logger.log_event(
+                    fused_obstacles=fused_obstacles,
+                    overall_risk=risk_assessment.overall_risk_level,
+                    vibration_action=vib_text,
+                    voice_message=alert_manager.last_triggered_text if alert_triggered else "",
+                    alert_triggered=alert_triggered,
+                )
+
+                snapshot = DashboardSnapshot.from_pipeline_results(
+                    fused_obstacles=fused_obstacles,
+                    sensor_readings=sensor_readings,
+                    overall_risk=risk_assessment.overall_risk_level,
+                    vibration_action=vib_text,
+                    voice_message=alert_manager.last_triggered_text or "Path clear.",
+                    recent_events=event_logger.recent_events,
+                    camera_status="NOT USED (scenario mode)",
+                    yolo_status="NOT USED (sensor-only)",
+                    sensors_status="ACTIVE (SIMULATED)",
+                    sensor_mode=f"{scenario_engine.status_text} [{index}/{len(names)}]",
+                    controls_hint=f"{scenario_engine.scenarios[name].description} | Ctrl+C to stop",
+                )
+                dashboard.display_cli(snapshot, clear_screen=True)
+                time.sleep(tick_s)
+
+        print("\n[SUCCESS] Scenario playback completed.")
+    except KeyboardInterrupt:
+        print("\n[INFO] Scenario playback interrupted (Ctrl+C).")
+    finally:
+        voice.stop()
+        event_logger.log_system_message("Scenario mode closed cleanly")
+
+
 def main() -> None:
     """Main execution function supporting CLI argument parsing."""
     parser = argparse.ArgumentParser(
@@ -565,8 +670,8 @@ def main() -> None:
         "--mode",
         type=str,
         default="fusion",
-        choices=["fusion", "alerts", "detection", "sensors", "simulation", "architecture", "dashboard"],
-        help="Execution mode: 'fusion' for sensor fusion, 'alerts' for alert demo, 'sensors' for sensor demo, 'detection' for live YOLO, 'simulation' for test loop, 'dashboard' for Phase 6 dashboard & logging",
+        choices=["fusion", "alerts", "detection", "sensors", "simulation", "architecture", "dashboard", "scenario"],
+        help="Execution mode: 'fusion' for sensor fusion, 'alerts' for alert demo, 'sensors' for sensor demo, 'detection' for live YOLO, 'simulation' for test loop, 'dashboard' for Phase 6 dashboard & logging, 'scenario' for camera-free scripted sensor scenarios",
     )
     parser.add_argument(
         "--config",
@@ -574,13 +679,30 @@ def main() -> None:
         default="config/config.yaml",
         help="Path to configuration YAML file",
     )
+    parser.add_argument(
+        "--scenario",
+        type=str,
+        default=None,
+        help="Simulated sensor scenario to start (see sensors.simulation.scenarios in the config). "
+             "In 'scenario' mode, omit it to play every scenario once.",
+    )
 
     args, _ = parser.parse_known_args()
 
+    if args.scenario:
+        available = list(
+            load_config(args.config).get("sensors", {}).get("simulation", {}).get("scenarios", {}) or {}
+        )
+        if args.scenario not in available:
+            print(f"[ERROR] Unknown scenario '{args.scenario}'. Available: {', '.join(available) or 'none'}")
+            return
+
     if args.mode == "dashboard":
-        run_dashboard_mode(config_path=args.config)
+        run_dashboard_mode(config_path=args.config, scenario=args.scenario)
+    elif args.mode == "scenario":
+        run_scenario_mode(config_path=args.config, scenario=args.scenario)
     elif args.mode == "fusion":
-        run_realtime_fusion(config_path=args.config)
+        run_realtime_fusion(config_path=args.config, scenario=args.scenario)
     elif args.mode == "alerts":
         run_alert_demo(config_path=args.config)
     elif args.mode == "detection":

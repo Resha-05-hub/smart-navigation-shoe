@@ -46,10 +46,10 @@ sensors:
     min_distance_m: 0.2
     max_distance_m: 4.0
     simulated_default_m: 2.5
-    simulated_positions:
-      left_cm: 150.0   # 150 cm (1.5 m) -> CAUTION
-      center_cm: 80.0  # 80 cm (0.8 m)  -> WARNING
-      right_cm: 220.0  # 220 cm (2.2 m) -> SAFE
+    simulated_positions:  # Startup distances (clear path); the scenario engine moves them at runtime
+      left_cm: 300.0
+      center_cm: 300.0
+      right_cm: 300.0
     update_interval_sec: 0.1
     gpio_trigger_pins:
       left: 23
@@ -59,6 +59,51 @@ sensors:
       left: 24
       center: 27
       right: 10
+
+  # Software-only demo: drives the SIMULATED distance sensors (no physical HC-SR04 hardware).
+  simulation:
+    startup: "manual"  # "manual" (keyboard control) or a scenario name below
+    step_cm: 10.0      # Distance change per key press
+    noise_cm: 1.0      # Gaussian jitter mimicking real ultrasonic readings (0 = none)
+    loop: true         # Scripted scenarios restart when finished (live camera modes)
+    # Keyframes: [time_s, left_cm, center_cm, right_cm]; values glide linearly between frames.
+    # null = sensor fault (reported INVALID) from that keyframe until the next one.
+    scenarios:
+      approaching_obstacle:
+        description: "Obstacle straight ahead closes from 3 m to 30 cm, then clears"
+        keyframes:
+          - [0, 300, 300, 300]
+          - [2, 300, 300, 300]
+          - [9, 300, 30, 300]
+          - [12, 300, 30, 300]
+          - [14, 300, 300, 300]
+      passing_left_then_right:
+        description: "Obstacle passes close on the left, then on the right"
+        keyframes:
+          - [0, 300, 300, 300]
+          - [4, 60, 300, 300]
+          - [6, 60, 300, 300]
+          - [8, 300, 300, 300]
+          - [12, 300, 300, 60]
+          - [14, 300, 300, 60]
+          - [16, 300, 300, 300]
+      narrow_corridor:
+        description: "Walls close in on both sides while the path ahead stays open"
+        keyframes:
+          - [0, 120, 300, 110]
+          - [6, 70, 280, 80]
+          - [10, 120, 300, 110]
+      mixed_zones:
+        description: "Static example: LEFT 150 cm (CAUTION), CENTER 80 cm (WARNING), RIGHT 220 cm (SAFE)"
+        keyframes:
+          - [0, 150, 80, 220]
+      sensor_fault:
+        description: "CENTER sensor fails for 4 s, then recovers"
+        keyframes:
+          - [0, 300, 120, 300]
+          - [3, 300, null, 300]
+          - [7, 300, 120, 300]
+          - [10, 300, 120, 300]
 
 risk_analysis:
   thresholds_cm:
