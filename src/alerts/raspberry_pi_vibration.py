@@ -17,9 +17,9 @@ class RaspberryPiVibration(VibrationInterface):
 
     def __init__(
         self,
-        left_pin: int = 17,
-        center_pin: int = 27,
-        right_pin: int = 22,
+        left_pin: int = 5,    # Defaults avoid the HC-SR04 trigger/echo pins (23/24, 17/27, 22/10)
+        center_pin: int = 6,
+        right_pin: int = 13,
     ) -> None:
         self.pins = {
             ObstacleZone.LEFT: left_pin,

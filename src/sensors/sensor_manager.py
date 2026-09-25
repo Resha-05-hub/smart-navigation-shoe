@@ -32,6 +32,8 @@ class SensorManager:
         self.min_distance_m = min_distance_m
         self.max_distance_m = max_distance_m
         self.sensors: Dict[ObstacleZone, DistanceSensorInterface] = {}
+        trigger_pins = {"left": 23, "center": 17, "right": 22}
+        echo_pins = {"left": 24, "center": 27, "right": 10}
 
         if config:
             sensor_cfg = config.get("sensors", {}).get("distance_sensor", {})
@@ -46,6 +48,8 @@ class SensorManager:
                 default_center_m = pos_cfg["center_cm"] / 100.0
             if "right_cm" in pos_cfg:
                 default_right_m = pos_cfg["right_cm"] / 100.0
+            trigger_pins.update(sensor_cfg.get("gpio_trigger_pins", {}) or {})
+            echo_pins.update(sensor_cfg.get("gpio_echo_pins", {}) or {})
 
         if self.sensor_type == "simulated":
             self.sensors = {
@@ -72,11 +76,15 @@ class SensorManager:
                 ),
             }
         else:
-            # Ultrasonic Hardware integration placeholder
+            # Ultrasonic hardware integration placeholder (pins from sensors.distance_sensor.gpio_*_pins)
             self.sensors = {
-                ObstacleZone.LEFT: UltrasonicSensor(trigger_pin=23, echo_pin=24, sensor_id="pi_left_ultrasonic"),
-                ObstacleZone.CENTER: UltrasonicSensor(trigger_pin=17, echo_pin=27, sensor_id="pi_center_ultrasonic"),
-                ObstacleZone.RIGHT: UltrasonicSensor(trigger_pin=22, echo_pin=10, sensor_id="pi_right_ultrasonic"),
+                zone: UltrasonicSensor(
+                    trigger_pin=trigger_pins[zone.value.lower()],
+                    echo_pin=echo_pins[zone.value.lower()],
+                    position=zone,
+                    sensor_id=f"pi_{zone.value.lower()}_ultrasonic",
+                )
+                for zone in (ObstacleZone.LEFT, ObstacleZone.CENTER, ObstacleZone.RIGHT)
             }
 
     def get_sensor(self, position: ObstacleZone) -> Optional[DistanceSensorInterface]:

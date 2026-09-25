@@ -39,8 +39,10 @@ class YoloDetector(DetectorInterface):
         iou_threshold: float = 0.45,
         device: str = "cpu",
         target_classes: Optional[List[str]] = None,
+        zone_boundaries: tuple = (0.33, 0.66),
     ) -> None:
         self.model_path = model_path
+        self.zone_boundaries = zone_boundaries  # LEFT | CENTER | RIGHT split (fraction of frame width)
         self.confidence_threshold = confidence_threshold
         self.iou_threshold = iou_threshold
         self.device = device
@@ -151,7 +153,7 @@ class YoloDetector(DetectorInterface):
                         bbox = BoundingBox(xmin=xmin, ymin=ymin, xmax=xmax, ymax=ymax)
 
                         center_x_norm = bbox.center_x / width if width > 0 else 0.5
-                        zone = determine_zone(center_x_norm)
+                        zone = determine_zone(center_x_norm, *self.zone_boundaries)
 
                         detection_item = DetectionItem(
                             label=label_name,

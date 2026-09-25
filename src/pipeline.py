@@ -26,12 +26,14 @@ from .sensors.sensor_manager import SensorManager
 def create_detector(config: Dict[str, Any]) -> YoloDetector:
     """YOLO detector configured from the detection section (weights are loaded separately)."""
     det_cfg = config.get("detection", {})
+    zones_cfg = config.get("risk_analysis", {}).get("zones", {})
     return YoloDetector(
         model_path=det_cfg.get("model_path", "models/yolov8n.pt"),
         confidence_threshold=det_cfg.get("confidence_threshold", 0.5),
         iou_threshold=det_cfg.get("iou_threshold", 0.45),
         device=det_cfg.get("device", "cpu"),
         target_classes=det_cfg.get("target_classes"),
+        zone_boundaries=(zones_cfg.get("left_boundary", 0.33), zones_cfg.get("right_boundary", 0.66)),
     )
 
 

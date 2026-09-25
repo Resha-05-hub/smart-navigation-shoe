@@ -1,8 +1,8 @@
 # Smart Navigation Shoe Configuration
 
 system:
-  mode: "fusion"  # Options: "fusion", "alerts", "detection", "sensors", "simulation", "raspberry_pi"
-  environment: "windows_laptop"
+  # Default --mode: dashboard (full demo), fusion, scenario (no camera), detection, alerts, sensors, architecture
+  mode: "dashboard"
 
 camera:
   type: "webcam"       # Options: "webcam", "video", "raspberry_pi"
@@ -10,8 +10,6 @@ camera:
   width: 640           # Webcam capture width; video/image sources are downscaled to this width
   height: 480
   fps: 30
-  frame_skip: 0
-  simulation_fallback: false
   # Video/image input: a video file, a single image, or a folder of images (played in name order).
   video_source: "demo/approach_demo.mp4"     # Used when type is "video"; --source PATH overrides
   fallback_source: "demo/approach_demo.mp4"  # Played automatically if the live camera fails ("" = none)
@@ -20,16 +18,14 @@ camera:
   image_duration_s: 3.0    # Seconds each still image is shown
 
 detection:
-  model_name: "yolov8n.pt"
   model_path: "models/yolov8n.pt"
   confidence_threshold: 0.5
   iou_threshold: 0.45
   device: "cpu"        # Options: "cpu", "cuda"
   display:
-    window_name: "Smart Navigation Shoe - Phase 5 Sensor Fusion & Alerts"
+    window_name: "Smart Navigation Shoe"
     show_confidence: true
     show_box: true
-    color_bgr: [0, 255, 0]
   # Only these COCO class names are detected (empty list = all 80 classes).
   # Stairs/doors are not COCO classes; low obstacles are caught by the distance sensors instead.
   target_classes:
@@ -54,8 +50,7 @@ tracking:
 
 sensors:
   distance_sensor:
-    type: "simulated"  # Options: "simulated", "ultrasonic"
-    unit: "cm"         # Display unit: "cm" or "m"
+    type: "simulated"  # Options: "simulated", "ultrasonic" (HC-SR04 on Raspberry Pi, future hardware phase)
     min_distance_m: 0.2
     max_distance_m: 4.0
     simulated_default_m: 2.5
@@ -64,7 +59,7 @@ sensors:
       center_cm: 300.0
       right_cm: 300.0
     update_interval_sec: 0.1
-    gpio_trigger_pins:
+    gpio_trigger_pins:   # BCM pin numbers for the future HC-SR04 hardware
       left: 23
       center: 17
       right: 22
@@ -128,15 +123,11 @@ sensors:
 
 risk_analysis:
   thresholds_cm:
-    danger_cm: 50.0      # < 50 cm = DANGER
+    danger_cm: 50.0      # <= 50 cm = DANGER
     warning_cm: 100.0    # 50 - 100 cm = WARNING
-    caution_cm: 200.0    # 100 - 200 cm = CAUTION
-    safe_cm: 200.0       # > 200 cm = SAFE
+    caution_cm: 200.0    # 100 - 200 cm = CAUTION; beyond = SAFE
   hysteresis_cm: 10.0    # Risk rises at a threshold but only falls once 10 cm past it (stops flicker)
-  critical_distance_m: 0.5
-  warning_distance_m: 1.0
-  safe_distance_m: 2.0
-  zones:
+  zones:                 # Horizontal image split into LEFT | CENTER | RIGHT (fraction of frame width)
     left_boundary: 0.33
     right_boundary: 0.66
 
@@ -154,10 +145,10 @@ alerts:
   vibration:
     type: "simulated"  # Options: "simulated", "gpio"
     enabled: true
-    gpio_pins:
-      left: 17
-      center: 27
-      right: 22
+    gpio_pins:         # BCM pins for future motors; must not overlap the ultrasonic pins above
+      left: 5
+      center: 6
+      right: 13
 
 dashboard:
   enabled: true
@@ -168,9 +159,9 @@ dashboard:
 
 logging:
   enabled: true
-  level: "INFO"
+  level: "INFO"           # Level written to system_log
+  console_level: "WARNING" # Terminal shows only warnings/errors (keeps the CLI dashboard clean)
   format: "%(asctime)s - [%(name)s] - %(levelname)s - %(message)s"
-  log_file: "logs/system.log"
   event_log: "logs/detection_events.csv"
   system_log: "logs/system.log"
 

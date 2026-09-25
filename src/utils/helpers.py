@@ -28,23 +28,16 @@ def load_config(config_path: str = "config/config.yaml") -> Dict[str, Any]:
     if not path.exists():
         return {}
 
-    if yaml is not None:
-        with open(path, "r", encoding="utf-8") as f:
-            config = yaml.safe_load(f)
-        return config or {}
+    if yaml is None:
+        # Previously a hard-coded fallback with different risk thresholds was returned silently
+        raise ImportError(
+            "PyYAML is required to read the configuration. Install dependencies with: "
+            "venvv\\Scripts\\python.exe -m pip install -r requirements.txt"
+        )
 
-    # Fallback basic YAML parser if PyYAML is not installed yet
-    fallback_config: Dict[str, Any] = {
-        "system": {"mode": "simulation", "environment": "windows_laptop"},
-        "camera": {"type": "webcam", "device_id": 0, "width": 640, "height": 480, "fps": 30},
-        "detection": {"model_path": "models/yolov8n.pt", "confidence_threshold": 0.5, "device": "cpu"},
-        "sensors": {"distance_sensor": {"type": "simulated", "min_distance_m": 0.2, "max_distance_m": 4.0, "simulated_default_m": 2.5}},
-        "risk_analysis": {"critical_distance_m": 0.8, "warning_distance_m": 1.8, "safe_distance_m": 3.0},
-        "direction": {"clear_path_threshold": 2.0},
-        "alerts": {"voice": {"enabled": True}, "vibration": {"type": "simulated", "enabled": True}},
-        "logging": {"level": "INFO", "format": "%(asctime)s - [%(name)s] - %(levelname)s - %(message)s"},
-    }
-    return fallback_config
+    with open(path, "r", encoding="utf-8") as f:
+        config = yaml.safe_load(f)
+    return config or {}
 
 
 def determine_zone(
