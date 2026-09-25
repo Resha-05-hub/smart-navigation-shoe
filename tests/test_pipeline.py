@@ -124,6 +124,26 @@ def test_default_mode_comes_from_config(config):
     dashboard.assert_not_called()
 
 
+def test_alert_demo_honors_voice_config(config, capsys):
+    """--mode alerts builds its alert system from the config (voice disabled here) like every other mode."""
+    created = []
+
+    def capture(cfg):
+        created.append(create_alert_system(cfg))
+        return created[-1]
+
+    with patch.object(app_main, "load_config", return_value=config), \
+            patch.object(app_main, "create_alert_system", side_effect=capture), \
+            patch.object(app_main.time, "sleep"):
+        app_main.run_alert_demo()
+
+    _, voice, _ = created[0]
+    assert not voice.enabled
+    output = capsys.readouterr().out
+    assert "Danger. Obstacle on the right." in output
+    assert "Completed Cleanly" in output
+
+
 def test_unknown_scenario_rejected(config, capsys):
     with patch.object(app_main, "load_config", return_value=config), \
             patch.object(app_main, "setup_logging"), \

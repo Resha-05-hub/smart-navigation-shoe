@@ -18,15 +18,12 @@ from src.camera.camera_factory import open_camera
 from src.sensors.sensor_manager import SensorManager
 from src.sensors.scenario_engine import CONTROLS_HELP
 from src.detection.yolo_detector import YoloDetector
-from src.alerts.simulated_vibration import SimulatedVibration
-from src.alerts.voice_alert import VoiceAlertManager
-from src.alerts.alert_manager import AlertManager
 from src.core.models import FusedObstacle, RiskAssessment, BoundingBox
 from src.core.enums import RiskLevel, ObstacleZone
 from src.dashboard.dashboard_data import DashboardSnapshot
 from src.dashboard.dashboard import Dashboard
 from src.event_logging.event_logger import EventLogger
-from src.pipeline import NavigationPipeline, PipelineResult, create_detector
+from src.pipeline import NavigationPipeline, PipelineResult, create_alert_system, create_detector
 from src.utils.visual import FrameRateMeter
 
 MODES = ["dashboard", "fusion", "scenario", "detection", "alerts", "sensors", "simulation", "architecture"]
@@ -183,9 +180,7 @@ def run_architecture_demo(config_path: str = "config/config.yaml") -> None:
 def run_alert_demo(config_path: str = "config/config.yaml") -> None:
     """Phase 5: Demonstrates directional vibration simulation and voice debouncing."""
     config = load_config(config_path)
-    vib = SimulatedVibration(enabled=True)
-    voice = VoiceAlertManager(enabled=True)
-    alert_mgr = AlertManager(vibration=vib, voice=voice, config=config, cooldown_seconds=0.1)
+    _vibration, voice, alert_mgr = create_alert_system(config)  # Honors alerts.voice / alerts.vibration settings
 
     print("\n" + "=" * 70)
     print("  PHASE 5 ALERT DEMONSTRATION (SOFTWARE SIMULATION)")
